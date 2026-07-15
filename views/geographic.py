@@ -160,18 +160,53 @@ with t2:
     pa = (txf.groupby("sub_market").agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
                                         transactions=("psf", "size")).reset_index())
     pa = pa[pa["transactions"] >= 10].sort_values("avg_psf", ascending=False)
-    st.markdown("**Avg $PSF by Planning Area** (areas with ≥10 transactions)")
+    st.markdown("**Avg $PSF by Planning Area** (areas with ≥10 transactions)  ·  click a bar to "
+               "see that area's transactions")
     st.caption("Note: areas with fewer than 10 transactions are excluded here because their "
                "averages are statistically unreliable.")
-    st.altair_chart(alt.Chart(pa).mark_bar().encode(
+    pick_pa = alt.selection_point(fields=["sub_market"], on="click", empty=False, name="pick_pa")
+    pa_chart = alt.Chart(pa).mark_bar().encode(
         y=alt.Y("sub_market:N", sort="-x", title=None),
         x=alt.X("avg_psf:Q", title="Avg $PSF"),
         color=alt.Color("avg_psf:Q", scale=alt.Scale(scheme="viridis"), legend=None),
+        opacity=alt.condition(pick_pa, alt.value(1.0), alt.value(0.45)),
         tooltip=["sub_market:N", alt.Tooltip("avg_psf:Q", format=",.0f"),
                  alt.Tooltip("transactions:Q", format=",.0f")]
-    ).properties(height=460), width="stretch")
+    ).add_params(pick_pa).properties(height=460)
+    pa_event = st.altair_chart(pa_chart, on_select="rerun", key="pa_rank", width="stretch")
     st.dataframe(pa.style.format({"avg_psf": "{:,.0f}", "median_psf": "{:,.0f}",
                                   "transactions": "{:,.0f}"}), width="stretch", hide_index=True)
+
+    # which planning area is selected? (clicked bar, else the top-ranked area)
+    sel_pa = None
+    try:
+        rows = pa_event.selection.get("pick_pa") if pa_event and pa_event.selection else None
+        if rows:
+            sel_pa = rows[0]["sub_market"]
+    except Exception:
+        sel_pa = None
+    if sel_pa is None:
+        sel_pa = pa.iloc[0]["sub_market"]
+
+    pa_tdf = txf[["Project Name", "Address", "sale_date", "area_sqft", "psf", "price",
+                 "tenure_type", "type_of_sale", "sub_market"]].copy()
+    pa_detail = duckdb.sql("""
+        SELECT "Project Name" AS project, Address AS address,
+               strftime(sale_date, '%Y-%m-%d') AS sale_date,
+               area_sqft, psf AS unit_psf, price AS transacted_price,
+               tenure_type AS tenure, type_of_sale AS sale_type
+        FROM pa_tdf
+        WHERE sub_market = ?
+        ORDER BY sale_date DESC
+    """, params=[sel_pa]).df()
+
+    st.markdown(f"**Transactions in {sel_pa}**  ·  {len(pa_detail):,} records")
+    st.dataframe(pa_detail.style.format({"area_sqft": "{:,.0f}", "unit_psf": "{:,.0f}",
+                                         "transacted_price": "{:,.0f}"}),
+                width="stretch", hide_index=True)
+    st.download_button("Download transactions (CSV)", pa_detail.to_csv(index=False),
+                       file_name=f"transactions_{sel_pa.replace(' ', '_')}.csv", mime="text/csv",
+                       key="dl_pa_txn")
 
 # ---------------------------------------------------------------- CBD & tenure premium
 with t3:

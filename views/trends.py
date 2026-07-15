@@ -126,6 +126,8 @@ def render_table(df, cols, key):
 st.title("Office Price Trends")
 tx, market = load_data()
 areas_all = tx["sub_market"].value_counts().index.tolist()
+projects_all = sorted(tx["Project Name"].dropna().unique())
+streets_all = sorted(tx["street"].dropna().unique())
 
 r1 = st.columns(3)
 yrs = sorted(tx["year"].unique())
@@ -136,7 +138,12 @@ r2 = st.columns(3)
 fmin, fmax = int(tx["floor"].min()), int(tx["floor"].max())
 floor_range = r2[0].select_slider("Floor range", options=list(range(fmin, fmax + 1)), value=(fmin, fmax))
 ten_sel = r2[1].multiselect("Tenure (empty = all)", ["Leasehold", "Freehold"])
-size_sel = r2[2].multiselect("Size band (empty = all)", ["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"])
+size_sel = r2[2].multiselect("Size band / area level (empty = all)",
+                             ["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"],
+                             help="Bucketed by unit area (sqft). This is the only area-level filter.")
+r3 = st.columns(2)
+name_sel = r3[0].multiselect("Project name (empty = all)", projects_all)
+street_sel = r3[1].multiselect("Street (empty = all)", streets_all)
 
 gran = st.radio("Granularity", ["Year", "Quarter"], horizontal=True)
 brk = st.checkbox("Break down by Planning Area (top 6)")
@@ -147,7 +154,9 @@ txf = tx[tx["sub_market"].isin(pick(sub_sel, areas_all))
          & tx["tenure_type"].isin(pick(ten_sel, ["Leasehold", "Freehold"]))
          & tx["size_band"].astype(str).isin(pick(size_sel, ["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"]))
          & tx["floor"].between(floor_range[0], floor_range[1])
-         & tx["year"].between(yr_range[0], yr_range[1])].copy()
+         & tx["year"].between(yr_range[0], yr_range[1])
+         & tx["Project Name"].isin(pick(name_sel, projects_all))
+         & tx["street"].isin(pick(street_sel, streets_all))].copy()
 
 if txf.empty:
     st.warning("No transactions match the current filters. Widen the selection above.")

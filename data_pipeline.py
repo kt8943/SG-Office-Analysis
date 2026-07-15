@@ -92,6 +92,12 @@ def load_data():
     tx["type_of_sale"] = tx["Type of Sale"]
     tx["floor"] = tx["Address"].str.extract(r"#(\d+)-")[0].astype(float)
     tx["floor"] = tx["floor"].fillna(tx["floor"].median()).astype(int)
+    # street name: strip the leading house number(s) — some addresses list several,
+    # comma-separated, e.g. "175,177 THOMSON ROAD" — and the "#unit" suffix, e.g.
+    # "3 SHENTON WAY #24-01" -> "SHENTON WAY"
+    tx["street"] = (tx["Address"].str.replace(
+        r"^\s*\d+[A-Za-z]?(?:\s*,\s*\d+[A-Za-z]?)*\s*(?:\(ENBLOC\)\s*|ENBLOC\s*)?", "", regex=True)
+                    .str.split("#").str[0].str.strip())
 
     market = _load_market("Property Price Index of Office Space.csv",
                           "Property Price Index of Office Space in Central Region (INDEX)", "price_index")

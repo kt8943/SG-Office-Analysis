@@ -234,8 +234,8 @@ condensed form (source, scope, en-bloc exclusion, real-$psf definition).
 
 ### Trends ([views/trends.py](views/trends.py))
 
-Top **filter bar** (Year range, Planning Area, Type of sale, Floor range, Tenure, Size band) →
-**KPI cards** (with period-on-period deltas) → **pill tabs**:
+Top **filter bar** (Year range, Planning Area, Type of sale, Floor range, Tenure, Size band /
+area level, Project name, Street) → **KPI cards** (with period-on-period deltas) → **pill tabs**:
 
 - **Avg Price** — **Average and Median** transacted price plotted as two lines on one $ axis
   (both are the same unit/scale, so this isn't a dual-axis chart — see §3.4 for why the two can
@@ -254,6 +254,15 @@ view split into the top-6 areas as separate lines (average-vs-median overlay is 
 mode — 6 areas × 2 metrics would be unreadable). Every tab's bottom **data table** mirrors its
 chart series and is downloadable as CSV.
 
+**Project name** and **Street** are `multiselect` dropdowns (searchable/type-ahead, like Planning
+Area), populated from the data's actual **229** distinct project names and **138** distinct street
+names — not free-text boxes. `street` is a column derived in `data_pipeline.py` by regex-stripping
+the leading house number and the `#unit` suffix from `Address` (e.g. `"3 SHENTON WAY #24-01"` →
+`"SHENTON WAY"`). A free-text "contains" box was tried first and dropped: it forces the user to
+guess exact spelling/casing with no visibility into what values exist, and a `str.contains` filter
+that matches zero rows silently empties the whole page. A dropdown sourced from real distinct
+values fixes both — see §7 for why this is a pandas/UI choice, not a SQL one.
+
 ### Geospatial Analysis ([views/geographic.py](views/geographic.py))
 
 Same top-level filters (Year range, Type of sale, Tenure), then tabs:
@@ -263,7 +272,9 @@ Same top-level filters (Year range, Type of sale, Tenure), then tabs:
   ranking bar chart. Selecting a district (bar click, or top-ranked by default) runs the DuckDB
   drill-down (§5, Step E) to list and download that district's transactions.
 - **Planning Area Rankings** — avg $psf by URA planning area (≥10 transactions only, to avoid
-  unstable small-sample averages).
+  unstable small-sample averages), clickable the same way as the district ranking: selecting a
+  bar (or the top-ranked area by default) runs a parameterized DuckDB query
+  (`WHERE sub_market = ?`) to list and download that area's transactions.
 - **CBD & Tenure Premium** — median $psf: Downtown Core vs. rest of market, and Freehold vs.
   Leasehold, as both KPI deltas and a grouped bar chart.
 
@@ -275,7 +286,42 @@ This is a standalone profiling script — the dashboard itself does not read `ou
 
 ---
 
-## 7. Known caveats
+## 7. How filtering works
+
+Every filter widget in the app (Year range, Planning Area, Type of sale, Floor range, Tenure,
+Size band, Project name, Street, and the Geospatial page's Year range/Type of sale/Tenure) is
+**plain pandas boolean masking** against the in-memory `tx` DataFrame — `.isin()` for
+multiselects, `.between()` for the two range sliders. There is no SQL involved in filtering:
+
+```python
+txf = tx[tx["sub_market"].isin(pick(sub_sel, areas_all))
+         & tx["type_of_sale"].isin(pick(tos_sel, [...]))
+         & tx["floor"].between(floor_range[0], floor_range[1])
+         & tx["Project Name"].isin(pick(name_sel, projects_all))
+         & tx["street"].isin(pick(street_sel, streets_all))].copy()
+```
+
+`pick(sel, allv)` (a small lambda) returns "all values" when a multiselect is empty, so an unused
+filter is a no-op rather than matching nothing. Dropdown **options** (`projects_all`,
+`streets_all`, `areas_all`) are just `tx[col].unique()` computed once per page run — a pandas
+operation, not a database query.
+
+**SQL (DuckDB) only shows up in two places**, both drill-downs *after* filtering, not filtering
+itself: the District Map and Planning Area ranking charts, where clicking a bar runs a
+`duckdb.sql(...)` query against the already-filtered `txf` to build that one district's/area's
+transaction table (§5, Step E). Everything upstream of that click — every checkbox, slider, and
+multiselect on the page — is pandas.
+
+**Why pandas instead of SQL for filtering:** the whole dataset (≤6,896 transactions) already fits
+comfortably in memory, and Streamlit reruns the whole script on every widget interaction — for
+data this size, boolean masking is simpler to read, avoids string-building queries (and the
+injection surface that comes with it, see §3.1's SQL parameterization), and is fast enough that a
+database round-trip wouldn't be faster. SQL would only start to pay off if the transaction table
+grew to millions of rows or moved to a real database backend instead of an in-memory DataFrame.
+
+---
+
+## 8. Known caveats
 - **Central-focused:** market/macro series use the Central geography; other regions are sparse.
 - **Latest quarter lag:** the most recent quarter (e.g. 2026Q2) may show `NaN` for GDP/CPI because
   those releases lag transactions.
