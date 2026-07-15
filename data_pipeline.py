@@ -71,10 +71,10 @@ def load_data():
     tx = pd.read_csv(DATA / "CommercialTransaction_byProject.csv", thousands=",")
     tx["sale_date"] = pd.to_datetime(tx["Sale Date"], format="%d %b %Y")
     tx = tx[tx["Type of Area"] == "Strata"].copy()
-    enbloc = ((tx["Area (SQFT)"] > 30000) | (tx["Transacted Price ($)"] > 50_000_000)
-              | (tx["Address"].str.contains("ENBLOC", case=False, na=False))
-              | (tx["Unit Price ($ PSF)"] > 10000))
-    tx = tx[~enbloc].copy()
+    # Drops only the mis-recorded SHENTON HOUSE en-bloc row (whole-building $538M sale
+    # posted against one unit's floor area, $psf 113,337) — bulk multi-unit purchases
+    # (e.g. Solitaire on Cecil, Samsung Hub) have normal $psf and are kept.
+    tx = tx[tx["Unit Price ($ PSF)"] < 50_000].copy()
 
     tx["price"] = tx["Transacted Price ($)"]
     tx["psf"] = tx["Unit Price ($ PSF)"]

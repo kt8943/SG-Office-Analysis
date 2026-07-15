@@ -15,7 +15,7 @@ MACRO_TABS = {"PSF vs CPI": ("cpi", "CPI (index, 2024=100)"),
               "PSF vs Rent Index": ("rent_index", "URA Office Rent Index"),
               "PSF vs Office Price Index": ("price_index", "URA Office Price Index")}
 FMT = {"volume": "{:,.0f}", "total_area": "{:,.0f}", "total_value": "{:,.0f}",
-       "avg_price": "{:,.0f}", "median_psf": "{:,.0f}", "mean_psf": "{:,.0f}",
+       "avg_price": "{:,.0f}", "median_price": "{:,.0f}", "median_psf": "{:,.0f}", "mean_psf": "{:,.0f}",
        "median_real_psf": "{:,.0f}", "price_index": "{:.1f}", "rent_index": "{:.1f}",
        "vacancy_rate": "{:.1f}", "supply_pipeline": "{:.0f}", "gdp_growth": "{:.1f}",
        "cpi": "{:.1f}", "sora_3m": "{:.2f}", "unemployment": "{:.1f}"}
@@ -24,7 +24,8 @@ FMT = {"volume": "{:,.0f}", "total_area": "{:,.0f}", "total_value": "{:,.0f}",
 def aggregate(tx, market, gran):
     key = "quarter" if gran == "Quarter" else "year"
     agg = (tx.groupby(key).agg(
-        volume=("psf", "size"), total_area=("area_sqft", "sum"), avg_price=("price", "mean"),
+        volume=("psf", "size"), total_area=("area_sqft", "sum"),
+        avg_price=("price", "mean"), median_price=("price", "median"),
         median_psf=("psf", "median"), mean_psf=("psf", "mean"),
         median_real_psf=("real_psf", "median"), total_value=("price", "sum")).reset_index())
     if gran == "Quarter":
@@ -66,6 +67,24 @@ def line_chart(agg, col, title, brk_df=None, events=False):
             y=alt.Y(f"{col}:Q", title=title, scale=alt.Scale(zero=False)),
             tooltip=["period:N", alt.Tooltip(f"{col}:Q", format=",.0f")])
     ev = event_layer(agg) if (events and brk_df is None) else None
+    chart = alt.layer(ch, ev) if ev is not None else ch
+    st.altair_chart(chart.properties(height=380).interactive(), width="stretch")
+
+
+def dual_line_chart(agg, series, y_title, events=False):
+    """series: [(col, label), ...] plotted as separate colored lines sharing one y-axis."""
+    st.markdown(f"**{y_title} Over Time**")
+    long = agg.melt(id_vars=["period_date", "period"], value_vars=[c for c, _ in series],
+                     var_name="metric", value_name="value")
+    labels = dict(series)
+    long["metric"] = long["metric"].map(labels)
+    ch = alt.Chart(long).mark_line(point=True).encode(
+        x=alt.X("period_date:T", title=None),
+        y=alt.Y("value:Q", title=y_title, scale=alt.Scale(zero=False)),
+        color=alt.Color("metric:N", title=None,
+                        scale=alt.Scale(domain=[l for _, l in series], range=[BLUE, RED])),
+        tooltip=["period:N", "metric:N", alt.Tooltip("value:Q", format=",.0f")])
+    ev = event_layer(agg) if events else None
     chart = alt.layer(ch, ev) if ev is not None else ch
     st.altair_chart(chart.properties(height=380).interactive(), width="stretch")
 
@@ -147,15 +166,22 @@ k[3].metric("Total value", f"${last['total_value']/1e6:,.0f}M", dl("total_value"
 t1, t2, t3, t4, t5 = st.tabs(["Avg Price", "PSF", "Transaction Volume", "Seasonality", "Macro Factors"])
 
 with t1:
-    bd = breakdown(txf, gran, "price", "mean", "avg_price") if brk else None
-    line_chart(agg, "avg_price", "Average Transacted Price Over Time", bd)
+    if brk:
+        bd = breakdown(txf, gran, "price", "mean", "avg_price")
+        line_chart(agg, "avg_price", "Average Transacted Price Over Time", bd)
+    else:
+        dual_line_chart(agg, [("avg_price", "Average"), ("median_price", "Median")],
+                        "Transacted Price ($)")
     with st.expander("AI Insight"):
         st.markdown(insight(agg, "avg_price", "Average transacted price"))
-    render_table(agg, ["period", "volume", "avg_price", "total_value"], "avg_price")
+    render_table(agg, ["period", "volume", "avg_price", "median_price", "total_value"], "avg_price")
 
 with t2:
-    bd = breakdown(txf, gran, "psf", "median", "median_psf") if brk else None
-    line_chart(agg, "median_psf", "Median $PSF Over Time", bd, events=True)
+    if brk:
+        bd = breakdown(txf, gran, "psf", "median", "median_psf")
+        line_chart(agg, "median_psf", "Median $PSF Over Time", bd, events=True)
+    else:
+        dual_line_chart(agg, [("mean_psf", "Average"), ("median_psf", "Median")], "$PSF", events=True)
     with st.expander("AI Insight"):
         st.markdown(insight(agg, "median_psf", "Median $PSF"))
     render_table(agg, ["period", "median_psf", "mean_psf", "median_real_psf"], "psf")
