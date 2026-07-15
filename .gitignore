@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# generated outputs / local db
+outputs/
+office.duckdb
+
+# OS / editor
+.DS_Store
+**/.DS_Store
+.vscode/
+
+# secrets (never commit)
+.streamlit/secrets.toml
