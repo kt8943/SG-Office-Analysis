@@ -3,7 +3,7 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
-from data_pipeline import load_data
+from data_pipeline import load_data, type_filter
 
 alt.data_transformers.disable_max_rows()
 BLUE, RED = "#2E7DF7", "#E4572E"
@@ -125,6 +125,14 @@ def render_table(df, cols, key):
 # --------------------------------------------------------------- page
 st.title("Office Price Trends")
 tx, market = load_data()
+tx, view_choice = type_filter(tx)
+if view_choice != "Strata":
+    st.warning(f"Transaction Type = **{view_choice}**: Land deals price $PSF on land/site "
+               "area, not unit area. Price and $PSF figures below are not on the same basis "
+               "as Strata-only views.", icon="⚠️")
+if tx.empty:
+    st.warning("No transactions for this Transaction Type selection.")
+    st.stop()
 areas_all = tx["sub_market"].value_counts().index.tolist()
 projects_all = sorted(tx["Project Name"].dropna().unique())
 streets_all = sorted(tx["street"].dropna().unique())
@@ -163,7 +171,7 @@ if txf.empty:
     st.stop()
 agg = aggregate(txf, market, gran)
 
-st.caption(f"{len(txf):,} transactions after filters · {yr_range[0]}–{yr_range[1]} · en-bloc excluded")
+st.caption(f"{len(txf):,} {view_choice} transactions after filters · {yr_range[0]}–{yr_range[1]}")
 last, prev = agg.iloc[-1], (agg.iloc[-2] if len(agg) > 1 else agg.iloc[-1])
 dl = lambda c: (None if prev[c] in (0, None) or pd.isna(prev[c]) else f"{(last[c]/prev[c]-1)*100:+.1f}%")
 k = st.columns(4)

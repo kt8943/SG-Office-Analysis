@@ -70,10 +70,14 @@ def _load_dos_wide(path, series, name):
 def load_data():
     tx = pd.read_csv(DATA / "CommercialTransaction_byProject.csv", thousands=",")
     tx["sale_date"] = pd.to_datetime(tx["Sale Date"], format="%d %b %Y")
-    tx = tx[tx["Type of Area"] == "Strata"].copy()
+    # "Strata" = individual unit sale; "Land" = whole-building/site sale (its $PSF is priced
+    # on LAND area, not unit area — not the same metric). Both kept here; the Transaction
+    # Type sidebar filter (type_filter, below) picks which the user sees.
+    tx["type_of_area"] = tx["Type of Area"]
     # Drops only the mis-recorded SHENTON HOUSE en-bloc row (whole-building $538M sale
     # posted against one unit's floor area, $psf 113,337) — bulk multi-unit purchases
-    # (e.g. Solitaire on Cecil, Samsung Hub) have normal $psf and are kept.
+    # (e.g. Solitaire on Cecil, Samsung Hub) have normal $psf and are kept. Never affects
+    # Land rows (their $psf, priced on site area, tops out around $39,000).
     tx = tx[tx["Unit Price ($ PSF)"] < 50_000].copy()
 
     tx["price"] = tx["Transacted Price ($)"]
@@ -91,7 +95,10 @@ def load_data():
                              labels=["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"])
     tx["type_of_sale"] = tx["Type of Sale"]
     tx["floor"] = tx["Address"].str.extract(r"#(\d+)-")[0].astype(float)
+    tx["floor_imputed"] = tx["floor"].isna()
     tx["floor"] = tx["floor"].fillna(tx["floor"].median()).astype(int)
+    tx["deal_band"] = pd.cut(tx["price"], [0, 5e6, 10e6, np.inf],
+                             labels=["<$5M", "$5-10M", ">$10M"])
     # street name: strip the leading house number(s) — some addresses list several,
     # comma-separated, e.g. "175,177 THOMSON ROAD" — and the "#unit" suffix, e.g.
     # "3 SHENTON WAY #24-01" -> "SHENTON WAY"
@@ -110,7 +117,9 @@ def load_data():
          "Supply of Private Sector Office Space in the Pipeline ('000 SQ M GROSS)", "supply_pipeline"),
     ]:
         market = market.merge(_load_market(path, col, name), on="quarter", how="outer")
-    for path, series, name in [("GDP Growth Rate.csv", "GDP At Current Market Prices", "gdp_growth"),
+    # Real GDP growth (chained 2015 dollars), not "At Current Market Prices" (nominal):
+    # nominal growth mixes inflation into the signal (e.g. 2021Q2 shows +33.7% nominal).
+    for path, series, name in [("GDP Growth Rate.csv", "GDP In Chained (2015) Dollars", "gdp_growth"),
                                ("CPI quarterly.csv", "All Items", "cpi")]:
         market = market.merge(_load_dos_wide(path, series, name), on="quarter", how="outer")
 
@@ -132,3 +141,22 @@ def load_data():
     tx = tx.merge(market[["quarter", "cpi"]], on="quarter", how="left")
     tx["real_psf"] = tx["psf"] * 100 / tx["cpi"]
     return tx, market.sort_values("quarter")
+
+
+def type_filter(tx):
+    """Sidebar 'Transaction Type' selector shared by every page (persists across page
+    switches via the shared session-state key). Strata = individual unit sales, the norm
+    for $PSF analysis. Land = whole-building/site sales, priced per sqft of LAND, not unit
+    area — a different metric, not just a wider version of the same one. Combined pools
+    both into one population; treat its $PSF figures with care."""
+    choice = st.sidebar.radio(
+        "Transaction Type", ["Strata", "Land", "Combined"], index=0, key="txn_type",
+        help="Strata = individual unit sales (used in most charts on this app). "
+             "Land = whole-building or site sales — priced per sqft of LAND, not unit area, "
+             "so not directly comparable to Strata $PSF. Combined pools both populations.")
+    if choice != "Combined":
+        tx = tx[tx["type_of_area"] == choice].copy()
+    if choice != "Strata":
+        st.sidebar.caption("Land $PSF is priced on site/land area, not unit area — "
+                           "not directly comparable to Strata $PSF.")
+    return tx, choice

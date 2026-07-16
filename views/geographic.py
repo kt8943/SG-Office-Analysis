@@ -8,7 +8,7 @@ import altair as alt
 import streamlit as st
 import streamlit.components.v1 as components
 
-from data_pipeline import load_data, DISTRICT_CENTROIDS, DISTRICT_LABELS
+from data_pipeline import load_data, type_filter, DISTRICT_CENTROIDS, DISTRICT_LABELS
 
 BLUE, RED = "#2E7DF7", "#E4572E"
 
@@ -75,22 +75,38 @@ st.caption("How location affects office pricing — district $PSF map, district 
            "rankings, and CBD / tenure premiums.")
 
 tx, _ = load_data()
+tx, view_choice = type_filter(tx)
+if view_choice != "Strata":
+    st.warning(f"Transaction Type = **{view_choice}**: Land deals price $PSF on land/site "
+               "area, not unit area, so the map/rankings below mix or show a different basis "
+               "than Strata-only $PSF.", icon="⚠️")
+if tx.empty:
+    st.warning("No transactions for this Transaction Type selection.")
+    st.stop()
+
+projects_all = sorted(tx["Project Name"].dropna().unique())
+streets_all = sorted(tx["street"].dropna().unique())
 
 c = st.columns(3)
 yrs = sorted(tx["year"].unique())
 yr_range = c[0].select_slider("Year range", options=yrs, value=(yrs[0], yrs[-1]))
 tos_sel = c[1].multiselect("Type of sale (empty = all)", ["Resale", "New Sale", "Sub Sale"])
 ten_sel = c[2].multiselect("Tenure (empty = all)", ["Leasehold", "Freehold"])
+c2 = st.columns(2)
+name_sel = c2[0].multiselect("Project name (empty = all)", projects_all)
+street_sel = c2[1].multiselect("Street (empty = all)", streets_all)
 
 pick = lambda sel, allv: allv if not sel else sel
 txf = tx[tx["year"].between(yr_range[0], yr_range[1])
          & tx["type_of_sale"].isin(pick(tos_sel, ["Resale", "New Sale", "Sub Sale"]))
-         & tx["tenure_type"].isin(pick(ten_sel, ["Leasehold", "Freehold"]))].copy()
+         & tx["tenure_type"].isin(pick(ten_sel, ["Leasehold", "Freehold"]))
+         & tx["Project Name"].isin(pick(name_sel, projects_all))
+         & tx["street"].isin(pick(street_sel, streets_all))].copy()
 
 if txf.empty:
     st.warning("No transactions match the current filters. Widen the selection above.")
     st.stop()
-st.caption(f"{len(txf):,} transactions · {yr_range[0]}–{yr_range[1]}")
+st.caption(f"{len(txf):,} {view_choice} transactions · {yr_range[0]}–{yr_range[1]}")
 
 t1, t2, t3 = st.tabs(["District Map & Rankings", "Planning Area Rankings", "CBD & Tenure Premium"])
 
