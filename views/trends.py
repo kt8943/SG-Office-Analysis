@@ -171,14 +171,23 @@ if txf.empty:
     st.stop()
 agg = aggregate(txf, market, gran)
 
-st.caption(f"{len(txf):,} {view_choice} transactions after filters · {yr_range[0]}–{yr_range[1]}")
-last, prev = agg.iloc[-1], (agg.iloc[-2] if len(agg) > 1 else agg.iloc[-1])
-dl = lambda c: (None if prev[c] in (0, None) or pd.isna(prev[c]) else f"{(last[c]/prev[c]-1)*100:+.1f}%")
+# KPI cards summarise the ENTIRE filtered selection (every filter above, incl. year
+# range), so they always match the transaction count in the caption — no silent
+# narrowing to the latest period. The time trend lives in the charts/tabs below.
+span = f"{yr_range[0]}–{yr_range[1]}" if yr_range[0] != yr_range[1] else f"{yr_range[0]}"
+st.caption(f"{len(txf):,} {view_choice} transactions after filters · {span}. "
+           "Headline figures below summarise this whole selection.")
+tot = txf["price"].sum()
+tot_str = f"${tot/1e9:,.2f}B" if tot >= 1e9 else f"${tot/1e6:,.0f}M"
 k = st.columns(4)
-k[0].metric(f"Median $PSF ({last['period']})", f"{last['median_psf']:,.0f}", dl("median_psf"))
-k[1].metric("Avg transacted price", f"${last['avg_price']:,.0f}", dl("avg_price"))
-k[2].metric("Volume", f"{int(last['volume']):,}", dl("volume"))
-k[3].metric("Total value", f"${last['total_value']/1e6:,.0f}M", dl("total_value"))
+k[0].metric("Median $PSF", f"{txf['psf'].median():,.0f}",
+            help=f"Median unit $PSF across all {len(txf):,} filtered deals ({span}).")
+k[1].metric("Avg transacted price", f"${txf['price'].mean():,.0f}",
+            help=f"Mean deal price across all {len(txf):,} filtered deals ({span}).")
+k[2].metric("Transactions", f"{len(txf):,}",
+            help=f"Number of filtered deals ({span}) — matches the count in the caption above.")
+k[3].metric("Total value", tot_str,
+            help=f"Sum of transacted prices across all {len(txf):,} filtered deals ({span}).")
 
 t1, t2, t3, t4, t5 = st.tabs(["Avg Price", "PSF", "Transaction Volume", "Seasonality", "Macro Factors"])
 
