@@ -147,15 +147,13 @@ def type_filter(tx):
     """Sidebar 'Transaction Type' selector shared by every page (persists across page
     switches via the shared session-state key). Strata = individual unit sales, the norm
     for $PSF analysis. Land = whole-building/site sales, priced per sqft of LAND, not unit
-    area — a different metric, not just a wider version of the same one. Combined pools
-    both into one population; treat its $PSF figures with care."""
+    area — a different metric. The two are never pooled, since their $PSF isn't comparable."""
     choice = st.sidebar.radio(
-        "Transaction Type", ["Strata", "Land", "Combined"], index=0, key="txn_type",
+        "Transaction Type", ["Strata", "Land"], index=0, key="txn_type",
         help="Strata = individual unit sales (used in most charts on this app). "
              "Land = whole-building or site sales — priced per sqft of LAND, not unit area, "
-             "so not directly comparable to Strata $PSF. Combined pools both populations.")
-    if choice != "Combined":
-        tx = tx[tx["type_of_area"] == choice].copy()
+             "so not directly comparable to Strata $PSF.")
+    tx = tx[tx["type_of_area"] == choice].copy()
     if choice != "Strata":
         st.sidebar.caption("Land $PSF is priced on site/land area, not unit area — "
                            "not directly comparable to Strata $PSF.")
