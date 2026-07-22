@@ -3,6 +3,7 @@ Shared data pipeline for the SG Office Analysis app.
 Cleans transactions + market/macro series and exposes a cached load_data().
 Also provides Singapore postal-district centroids/labels for the geographic page.
 """
+import glob
 import re
 from pathlib import Path
 
@@ -64,6 +65,119 @@ def _load_dos_wide(path, series, name):
             rec.append((pd.Period(f"{m.group(1)}Q{m.group(2)}", freq="Q"),
                         pd.to_numeric(val, errors="coerce")))
     return pd.DataFrame(rec, columns=["quarter", name]).dropna()
+
+
+def _load_dos_wide_monthly(path, series, name):
+    """Same SingStat Table Builder 'wide' layout as _load_dos_wide, but columns are
+    calendar months (e.g. '2026 May') instead of quarters ('2026 1Q')."""
+    raw = pd.read_csv(DATA / path, header=None, dtype=str)
+    hdr = raw.index[raw[0].astype(str).str.strip() == "Data Series"][0]
+    df = pd.read_csv(DATA / path, skiprows=hdr)
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.rename(columns={df.columns[0]: "series"})
+    row = df[df["series"].astype(str).str.strip() == series]
+    rec = []
+    for col, val in row.iloc[0, 1:].items():
+        m = re.match(r"(\d{4})\s*([A-Za-z]{3})", str(col).strip())
+        if m:
+            period = pd.to_datetime(f"{m.group(1)}-{m.group(2)}-01",
+                                    format="%Y-%b-%d", errors="coerce").to_period("M")
+            rec.append((period, pd.to_numeric(val, errors="coerce")))
+    return pd.DataFrame(rec, columns=["month", name]).dropna()
+
+
+def _load_mas_monthly(path, name, header_hint):
+    """MAS 'Financial Database' monthly export: a single header line containing
+    `header_hint`, then rows of (year — blank-filled after January, month abbrev,
+    value). Used for the SGS 10-year bond yield and the SGD/USD exchange rate, both
+    single-series exports (verified: exactly 3 columns, no other tenor/currency mixed
+    in). Monthly SGS yield is MAS's own average-of-daily-bids for the month (not
+    re-derived here); monthly FX is MAS's end-of-period convention — both used as
+    published, not recomputed, to avoid silently changing MAS's own methodology."""
+    with open(DATA / path, encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().splitlines()
+    hdr = next(i for i, l in enumerate(lines) if header_hint.lower() in l.lower())
+    raw = pd.read_csv(DATA / path, skiprows=hdr + 1, header=None,
+                      names=["yr", "mth", name], dtype=str, on_bad_lines="skip")
+    raw["yr"] = raw["yr"].ffill()
+    raw = raw[raw["yr"].str.match(r"^\d{4}$", na=False) & raw["mth"].notna()]
+    raw["month"] = pd.to_datetime(raw["yr"] + "-" + raw["mth"], format="%Y-%b",
+                                  errors="coerce").dt.to_period("M")
+    raw[name] = pd.to_numeric(raw[name], errors="coerce")
+    return raw.dropna(subset=["month", name])[["month", name]]
+
+
+def _load_construction_materials():
+    """Raw monthly market prices, one column per material — deliberately NOT combined
+    into a single 'construction cost index'. The five materials are on different
+    scales/units (e.g. steel ~$700 vs granite ~$25) and SingStat does not publish
+    weights here, unlike BCA's own (weighted) Tender Price Index — averaging them
+    unweighted would fabricate a precision we don't have. Use whichever material(s)
+    are relevant to a given analysis explicitly, rather than a blended figure."""
+    df = pd.read_csv(DATA / "Construction Material Market Prices Monthly.csv")
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.rename(columns={df.columns[0]: "material"})
+    long = df.melt(id_vars="material", var_name="col", value_name="value")
+    long["month"] = pd.to_datetime(long["col"], format="%Y%b", errors="coerce").dt.to_period("M")
+    long["value"] = pd.to_numeric(long["value"], errors="coerce")
+    long = long.dropna(subset=["month", "value"])
+    key = {"Cement In Bulk (Ordinary Portland Cement)": "price_cement",
+           "Steel Reinforcement Bars (16-32mm High Tensile)": "price_steel_rebar",
+           "Granite (20mm Aggregate)": "price_granite",
+           "Concreting Sand": "price_sand",
+           "Ready Mixed Concrete": "price_concrete"}
+    out = long.pivot_table(index="month", columns="material", values="value").reset_index()
+    out = out.rename(columns=key)
+    keep = ["month"] + [c for c in key.values() if c in out.columns]
+    return out[keep]
+
+
+@st.cache_data
+def load_market_monthly():
+    """Natively monthly market/macro series — NOT derived by forward-filling quarterly
+    data (see market_monthly() for that path). Each source here actually publishes at
+    monthly frequency, so every value is a real observation, not a repeated step."""
+    m = _load_dos_wide_monthly("CPI monthly.csv", "All Items", "cpi")
+
+    sora = pd.read_csv(DATA / "Domestic Interest Rates (9).csv", skiprows=6)
+    sora.columns = [str(c).strip() for c in sora.columns]
+    sora["date"] = pd.to_datetime(sora["SORA Publication Date"], format="%d %b %Y", errors="coerce")
+    sora["sora_3m"] = pd.to_numeric(sora["Compound SORA - 3 month"], errors="coerce")
+    sora = sora.dropna(subset=["date", "sora_3m"])
+    sm = sora.groupby(sora["date"].dt.to_period("M"))["sora_3m"].mean().reset_index()
+    sm.columns = ["month", "sora_3m"]
+    m = m.merge(sm, on="month", how="outer")
+
+    m = m.merge(_load_mas_monthly(
+        "SGS - Historical Prices and Yields - Benchmark Issues (Monthly).csv",
+        "sgs_10y_yield", "10-Year Bond Yield"), on="month", how="outer")
+    m = m.merge(_load_mas_monthly(
+        "Exchange Rates (Monthly).csv",
+        "sgd_usd_fx", "S$ Per Unit of US Dollar"), on="month", how="outer")
+    m = m.merge(_load_construction_materials(), on="month", how="outer")
+    return m.sort_values("month").reset_index(drop=True)
+
+
+@st.cache_data
+def load_employment_annual():
+    """Annual PMET (Professionals, Managers, Executives & Technicians) resident
+    employment level — MOM's standard proxy for office-using employment (excludes
+    clerical, service/sales, craft, plant/machine, cleaner/labourer occupations).
+    Kept as its own annual-frequency table rather than forward-filled into the
+    quarter/month tables here: annual -> quarter is a much coarser assumption than
+    quarter -> month, so any expansion should be done explicitly where it's used and
+    clearly labelled, not baked silently into the shared pipeline.
+    'Annual Employment Level by Industry.xlsx' is intentionally NOT used: it is a raw
+    SingStat Table Builder interactive-export artifact (SSIC crosswalk/instruction
+    sheets, no single clean table) and is redundant with this cleaner occupation-level
+    series for a level-type employment metric."""
+    o = pd.read_csv(DATA / "Number of Employed Residents by Occupation.csv")
+    pmet_occupations = {"managers & administrators (including working proprietors)",
+                        "professionals", "associate professionals & technicians"}
+    pmet = (o[o["occupation"].isin(pmet_occupations)]
+            .groupby("year")["employed"].sum().reset_index()
+            .rename(columns={"employed": "pmet_employment"}))
+    return pmet
 
 
 @st.cache_data
@@ -137,6 +251,27 @@ def load_data():
     un["quarter"] = pd.PeriodIndex(pd.to_datetime(un["month"]), freq="Q")
     un["unemployment"] = pd.to_numeric(un["seasonally_adjusted_unemployment_rate"], errors="coerce")
     market = market.merge(un[["quarter", "unemployment"]], on="quarter", how="outer")
+
+    # Office-using services employment change (quarterly, '000 persons, net change) —
+    # Finance & Insurance + Real Estate + Professional Services. SSIC industry labels
+    # were revised twice across this 1991-2026 window; verified non-overlapping by
+    # quarter (no double-count risk): "financial services" (1991-2008) was renamed
+    # "financial and insurance services" (2009-2026); "business and real estate
+    # services" (1991-2001) split into "real estate and leasing services" (2002-2008)
+    # then "real estate services" (2009-2026), with "professional services" carved out
+    # as its own category from 2002 onward (no data before then). Summing every label
+    # per quarter is therefore safe.
+    emp_path = glob.glob(str(DATA / "Quarterly Employ*ment Change by Industry.csv"))[0]
+    emp = pd.read_csv(emp_path)
+    office_services = {"financial services", "financial and insurance services",
+                       "business and real estate services", "real estate and leasing services",
+                       "real estate services", "professional services"}
+    emp_office = emp[emp["industry2"].isin(office_services)].copy()
+    emp_office["employment_change"] = pd.to_numeric(emp_office["employment_change"], errors="coerce")
+    eq = (emp_office.groupby("quarter")["employment_change"].sum().reset_index()
+          .rename(columns={"employment_change": "office_employment_chg"}))
+    eq["quarter"] = pd.PeriodIndex(eq["quarter"], freq="Q")
+    market = market.merge(eq, on="quarter", how="outer")
 
     tx = tx.merge(market[["quarter", "cpi"]], on="quarter", how="left")
     tx["real_psf"] = tx["psf"] * 100 / tx["cpi"]
