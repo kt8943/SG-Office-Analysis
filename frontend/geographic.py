@@ -394,6 +394,29 @@ with t4:
         premium_bar_chart(txf, "deal_band", deal_labels, RED)
 
     st.divider()
+    row4a, row4b = st.columns(2)
+    with row4a:
+        st.markdown("**MRT density (400m) premium**")
+        count_txf = txf.dropna(subset=["lat", "lon"])
+        if count_txf.empty:
+            st.info("No geocoded transactions in the current filter.")
+        else:
+            st.caption("Number of distinct stations within a 5-min (400m) walk — a clean, "
+                       "roughly monotonic premium in the current data.")
+            premium_bar_chart(count_txf, "mrt_count_400m", [0, 1, 2, 3], BLUE)
+    with row4b:
+        st.markdown("**Interchange-access (400m) premium**")
+        inter_txf = txf.dropna(subset=["lat", "lon"])
+        if inter_txf.empty:
+            st.info("No geocoded transactions in the current filter.")
+        else:
+            st.caption("Whether an interchange station (≥2 MRT/LRT lines, verified against "
+                       "LTA's official station-line list, §8) is within 400m — weaker than "
+                       "MRT density: the interchange effect is largely already captured by "
+                       "station density and CBD location, so this adds little on its own.")
+            premium_bar_chart(inter_txf, "near_interchange_400m", [False, True], RED)
+
+    st.divider()
     st.markdown("**MRT-accessibility premium**")
     mrt_txf = txf.dropna(subset=["dist_to_mrt_km"])
     if len(mrt_txf) < 10:

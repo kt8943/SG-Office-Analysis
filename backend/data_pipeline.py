@@ -197,11 +197,72 @@ def _load_mrt_exits():
     return df
 
 
+# LTA's own station-code file (below) predates Circle Line Stage 6, which opened
+# 12 Jul 2026 — Keppel/Cantonment/Prince Edward Road aren't in it yet, though their
+# exits already are (Data/LTAMRTStationExit.geojson has them as bare codes "Cc30"/
+# "Cc31"/"Cc32"). Manually patched in from LTA's own CCL6 project page and press
+# coverage at opening (searched, not recalled from training data): all three are
+# single-line Circle Line stations between HarbourFront and Marina Bay, not
+# interchanges. Marina Bay's Circle Line code was also renumbered by the same loop
+# closure — "CE2" (Circle Line Extension) becomes "CC33" — so CC33 is patched in too,
+# as an alias for the same physical line/station, not a 4th line: it's given CE2's
+# exact mrt_line_english text ("Circle Line Extension") so the two rows dedupe to one
+# line when counting, keeping Marina Bay at the correct 3 lines (NS27/CE2+CC33/TE20).
+# Remove this whole patch once LTA republishes the codes file with CCL6 included.
+_CCL6_PATCH = pd.DataFrame([
+    ("CC30", "Keppel", "Circle Line"),
+    ("CC31", "Cantonment", "Circle Line"),
+    ("CC32", "Prince Edward Road", "Circle Line"),
+    ("CC33", "Marina Bay", "Circle Line Extension"),
+], columns=["stn_code", "mrt_station_english", "mrt_line_english"])
+
+
+def _load_mrt_lines():
+    """LTA's official station<->line list (Data/Train Station Codes and Chinese
+    Names.xls, one row per (station, line) — an interchange station simply appears
+    more than once, e.g. Outram Park has rows EW16/NE3/TE17), plus _CCL6_PATCH above.
+    Counting distinct lines per station name is a direct, verified way to identify
+    interchanges (29 of 185 stations) — checked and rejected exit count as a proxy
+    first: it's noisy, since big single-line stations near large developments
+    (Farrer Park, Tanjong Pagar) can have as many exits as a real interchange."""
+    df = pd.read_excel(DATA / "Train Station Codes and Chinese Names.xls")
+    df["mrt_station_english"] = df["mrt_station_english"].str.strip()
+    df = pd.concat([df, _CCL6_PATCH], ignore_index=True)
+    code_to_name = df.drop_duplicates("stn_code").set_index("stn_code")["mrt_station_english"]
+    lines = (df.groupby("mrt_station_english")["mrt_line_english"].nunique()
+            .rename("n_lines").reset_index().rename(columns={"mrt_station_english": "station"}))
+    return lines, code_to_name
+
+
 @st.cache_data
 def load_mrt_stations():
-    """One point per station (mean of its exits) — for map markers, not distance calc
-    (see _load_mrt_exits/_nearest_mrt for the exit-level version used there)."""
-    return _load_mrt_exits().groupby("station", as_index=False)[["lat", "lon"]].mean()
+    """One point per station (mean of its exits), plus `n_lines`/`is_interchange`
+    from _load_mrt_lines(). Two reconciliation steps against the exit geojson: (1) a
+    handful of its STATION_NA values are themselves bare line codes (e.g. "Ne18") —
+    fixed via the code->name lookup; (2) matching is case-insensitive, since the
+    exit file's Title-Case cleanup doesn't reproduce official casing like
+    "HarbourFront"/"one-north". Stations still unmatched after that (as of this
+    dataset: only the 3 Circle Line 6 stations that opened 12 Jul 2026, days after
+    this LTA reference file was last published) default to `is_interchange=False` —
+    a reasonable, documented assumption for brand-new single-line-extension
+    stations, not a guess dressed up as verified data. Wherever a match exists, the
+    displayed station name is also overwritten with LTA's official casing (verified:
+    our own Title-Case cleanup mangles "MacPherson"/"HarbourFront" into
+    "Macpherson"/"Harbourfront" — cosmetic only, doesn't affect is_interchange)."""
+    exits = _load_mrt_exits().copy()
+    lines, code_to_name = _load_mrt_lines()
+    exits["station"] = exits["station"].str.upper().map(code_to_name).fillna(exits["station"])
+
+    stations = exits.groupby("station", as_index=False)[["lat", "lon"]].mean()
+    stations["match_key"] = stations["station"].str.upper()
+    lines["match_key"] = lines["station"].str.upper()
+    stations = stations.merge(
+        lines[["match_key", "station", "n_lines"]].rename(columns={"station": "official_name"}),
+        on="match_key", how="left").drop(columns="match_key")
+    stations["station"] = stations["official_name"].fillna(stations["station"])
+    stations = stations.drop(columns="official_name")
+    stations["is_interchange"] = stations["n_lines"].fillna(1) >= 2
+    return stations
 
 
 def _haversine_km(lat1, lon1, lat2, lon2):
@@ -278,6 +339,19 @@ def load_data():
     tx["nearest_mrt"] = None
     tx.loc[geo, "dist_to_mrt_km"] = dist
     tx.loc[geo, "nearest_mrt"] = station
+
+    # Proximity features at station level (not exit level, unlike dist_to_mrt_km
+    # above — counting exits would inflate interchanges, which have several, as if
+    # they were several separate stations). 400m = ~5 min walk, the standard
+    # "walking distance to transit" threshold used in Singapore's own URA/HDB
+    # planning parameters and in local MRT-premium research.
+    stations = load_mrt_stations()
+    within_400m = _haversine_km(tx.loc[geo, "lat"].to_numpy()[:, None], tx.loc[geo, "lon"].to_numpy()[:, None],
+                                stations["lat"].to_numpy()[None, :], stations["lon"].to_numpy()[None, :]) <= 0.4
+    tx["mrt_count_400m"] = 0
+    tx["near_interchange_400m"] = False
+    tx.loc[geo, "mrt_count_400m"] = within_400m.sum(axis=1)
+    tx.loc[geo, "near_interchange_400m"] = (within_400m & stations["is_interchange"].to_numpy()[None, :]).any(axis=1)
 
     market = _load_market("Property Price Index of Office Space.csv",
                           "Property Price Index of Office Space in Central Region (INDEX)", "price_index")
