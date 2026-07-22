@@ -266,7 +266,8 @@ def load_data():
     # key both here and in that script; must stay in sync with it if either changes.
     gb = pd.read_csv(DATA / "geocoded_buildings.csv")
     tx["block_address"] = tx["Address"].str.split("#").str[0].str.strip()
-    tx = tx.merge(gb[["Project Name", "block_address", "lat", "lon"]],
+    tx = tx.merge(gb[["Project Name", "block_address", "lat", "lon", "precision"]]
+                 .rename(columns={"precision": "geocode_precision"}),
                  on=["Project Name", "block_address"], how="left")
     tx = tx.drop(columns="block_address")
 

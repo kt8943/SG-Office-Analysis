@@ -48,14 +48,16 @@ function initMap(){
   const txData = __TXDATA__; const mrtData = __MRTDATA__;
   const info = new google.maps.InfoWindow();
   txData.forEach(function(p){
+    const approx = p.precision === "street";
     const c = new google.maps.Circle({
-      strokeColor:p.color, strokeOpacity:0.8, strokeWeight:1,
-      fillColor:p.color, fillOpacity:0.65, map:map,
+      strokeColor:p.color, strokeOpacity: approx ? 0.5 : 0.8, strokeWeight:1,
+      fillColor:p.color, fillOpacity: approx ? 0.35 : 0.65, map:map,
       center:{lat:p.lat, lng:p.lon}, radius:40});
     c.addListener("click", function(){
       info.setPosition({lat:p.lat, lng:p.lon});
-      info.setContent("<b>"+p.label+"</b><br>$PSF: "+Math.round(p.psf)+
-                      "<br>"+p.date);
+      info.setContent("<b>"+p.label+"</b><br>$PSF: "+Math.round(p.psf)+"<br>"+p.date+
+                      (approx ? "<br><i>Approximate — building not in OneMap's index; "+
+                                "placed on its street.</i>" : ""));
       info.open(map);
     });
   });
@@ -89,7 +91,12 @@ def gmaps_key():
         return os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
 
-def render_district_map(d):
+def render_bubble_map(d, unit_noun):
+    """d needs lat/lon (bubble position), avg_psf (colour), transactions (size), label
+    (tooltip). Used for both District and Planning Area aggregate views — the position
+    is the mean lat/lon of that group's geocoded transactions (real building locations,
+    not a hand-set centroid; §8), so it moves with wherever the group's actual deals
+    are, not a fixed approximate point."""
     key = gmaps_key()
     if not key:
         st.error("Google Maps API key not set. Add `GOOGLE_MAPS_API_KEY` to "
@@ -103,9 +110,10 @@ def render_district_map(d):
     html = (GMAP_TEMPLATE.replace("__KEY__", key)
             .replace("__DATA__", json.dumps(pts)).replace("__TMAX__", str(tmax)))
     components.html(html, height=520)
-    st.caption(f"Each bubble is a district. Colour shows average $PSF (dark blue ${lo:,.0f} "
-               f"→ yellow ${hi:,.0f}); bubble size shows the number of transactions. Click a "
-               "bubble for details.")
+    st.caption(f"Each bubble is a {unit_noun}, positioned at the average location of its "
+               f"geocoded transactions. Colour shows average $PSF (dark blue ${lo:,.0f} "
+               f"→ yellow ${hi:,.0f}); bubble size shows the number of transactions. Click "
+               "a bubble for details.")
 
 
 def render_transaction_map(txf, mrt):
@@ -120,11 +128,12 @@ def render_transaction_map(txf, mrt):
         return
     geocoded = txf.dropna(subset=["lat", "lon"])
     n_missing = len(txf) - len(geocoded)
+    n_approx = int((geocoded["geocode_precision"] == "street").sum())
     lo, hi = geocoded["psf"].min(), geocoded["psf"].max()
     tx_pts = (geocoded.assign(color=geocoded["psf"].map(lambda v: val_to_hex(v, lo, hi)),
                               date=geocoded["sale_date"].dt.strftime("%Y-%m-%d"),
-                              label=geocoded["Project Name"])
-             [["lat", "lon", "psf", "color", "date", "label"]]
+                              label=geocoded["Project Name"], precision=geocoded["geocode_precision"])
+             [["lat", "lon", "psf", "color", "date", "label", "precision"]]
              .round({"psf": 0}).to_dict("records"))
     mrt_pts = mrt[["station", "lat", "lon"]].to_dict("records")
     html = (TXN_MAP_TEMPLATE.replace("__KEY__", key)
@@ -132,9 +141,10 @@ def render_transaction_map(txf, mrt):
     components.html(html, height=620)
     cov = len(geocoded) / len(txf) * 100 if len(txf) else 0
     st.caption(f"{len(geocoded):,} of {len(txf):,} transactions plotted ({cov:.0f}% geocoded"
-               f"{f', {n_missing} buildings not yet geocoded' if n_missing else ''}). Each dot is "
-               f"one transaction, coloured by $PSF (dark blue ${lo:,.0f} → yellow ${hi:,.0f}). "
-               "Green dots are MRT/LRT station exits.")
+               f"{f', {n_missing} at buildings not in OneMap' if n_missing else ''}"
+               f"{f', {n_approx} shown faded — street-level approximate, §8' if n_approx else ''}"
+               f"). Each dot is one transaction, coloured by $PSF (dark blue ${lo:,.0f} → "
+               f"yellow ${hi:,.0f}). Green dots are MRT/LRT station exits.")
 
 
 st.title("Geospatial Analysis")
@@ -191,17 +201,21 @@ with t1:
     else:
         d = (txf.dropna(subset=["postal_district"]).groupby("postal_district")
              .agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
-                  transactions=("psf", "size"), avg_price=("price", "mean")).reset_index())
+                  transactions=("psf", "size"), avg_price=("price", "mean"),
+                  lat=("lat", "mean"), lon=("lon", "mean")).reset_index())
         d["district"] = d["postal_district"].astype(int)
         d["label"] = d["district"].map(DISTRICT_LABELS)
-        d["lat"] = d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[0])
-        d["lon"] = d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[1])
+        # bubble position = mean of that district's real geocoded transactions; only
+        # fall back to the hand-set approximate centroid (DISTRICT_CENTROIDS) if a
+        # district has zero geocoded transactions in the current filter.
+        d["lat"] = d["lat"].fillna(d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[0]))
+        d["lon"] = d["lon"].fillna(d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[1]))
         d = d.dropna(subset=["lat", "lon"])
 
         left, right = st.columns([3, 2])
         with left:
             st.markdown("**Average office $PSF by district**")
-            render_district_map(d)
+            render_bubble_map(d, "district")
         with right:
             st.markdown("**Avg $PSF ranking** — click a bar to see that district's transactions")
             pick = alt.selection_point(fields=["district"], on="click", empty=False, name="pick")
@@ -251,8 +265,17 @@ with t1:
 # ---------------------------------------------------------------- planning area ranking
 with t2:
     pa = (txf.groupby("sub_market").agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
-                                        transactions=("psf", "size")).reset_index())
+                                        transactions=("psf", "size"),
+                                        lat=("lat", "mean"), lon=("lon", "mean")).reset_index())
     pa = pa[pa["transactions"] >= 10].sort_values("avg_psf", ascending=False)
+
+    st.markdown("**Average office $PSF by planning area**")
+    pa_map = pa.assign(label=pa["sub_market"]).dropna(subset=["lat", "lon"])
+    if pa_map.empty:
+        st.info("No geocoded transactions to plot for the current filter.")
+    else:
+        render_bubble_map(pa_map, "planning area")
+
     st.markdown("**Avg $PSF by Planning Area** (areas with ≥10 transactions)  ·  click a bar to "
                "see that area's transactions")
     st.caption("Note: areas with fewer than 10 transactions are excluded here because their "
@@ -267,8 +290,9 @@ with t2:
                  alt.Tooltip("transactions:Q", format=",.0f")]
     ).add_params(pick_pa).properties(height=460)
     pa_event = st.altair_chart(pa_chart, on_select="rerun", key="pa_rank", width="stretch")
-    st.dataframe(pa.style.format({"avg_psf": "{:,.0f}", "median_psf": "{:,.0f}",
-                                  "transactions": "{:,.0f}"}), width="stretch", hide_index=True)
+    st.dataframe(pa[["sub_market", "avg_psf", "median_psf", "transactions"]]
+                .style.format({"avg_psf": "{:,.0f}", "median_psf": "{:,.0f}", "transactions": "{:,.0f}"}),
+                width="stretch", hide_index=True)
 
     # which planning area is selected? (clicked bar, else the top-ranked area)
     sel_pa = None

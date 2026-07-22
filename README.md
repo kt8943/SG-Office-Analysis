@@ -370,10 +370,12 @@ Tenure, Project name, Street), then tabs:
   click, or top-ranked by default) runs the DuckDB drill-down (§5, Step E) to list and download
   that district's transactions. Only the aggregate view has the ranking chart/drill-down; the
   individual-transactions map *is* the detail view, so there's nothing further to drill into.
-- **Planning Area Rankings** — avg $psf by URA planning area (≥10 transactions only, to avoid
-  unstable small-sample averages), clickable the same way as the district ranking: selecting a
-  bar (or the top-ranked area by default) runs a parameterized DuckDB query
-  (`WHERE sub_market = ?`) to list and download that area's transactions.
+- **Planning Area Rankings** — opens with its own bubble map (same `render_bubble_map` as District
+  aggregate, just grouped by planning area instead of postal district), then avg $psf by URA
+  planning area (≥10 transactions only, to avoid unstable small-sample averages), clickable the
+  same way as the district ranking: selecting a bar (or the top-ranked area by default) runs a
+  parameterized DuckDB query (`WHERE sub_market = ?`) to list and download that area's
+  transactions.
 - **CBD & Tenure Premium** — median $psf: Downtown Core vs. rest of market, and Freehold vs.
   Leasehold, as both KPI deltas and a grouped bar chart; plus an **MRT-accessibility premium**
   chart (median $psf by distance-to-nearest-MRT band, §9) for geocoded transactions.
@@ -430,13 +432,26 @@ grew to millions of rows or moved to a real database backend instead of an in-me
 - **Geocoding is per-building, not per-unit:** `lat`/`lon` come from `backend/geocode_buildings.py`
   (OneMap Search API, cached to `Data/geocoded_buildings.csv`) at the building/block level — units
   in the same building necessarily share one point, since that's the precision OneMap actually
-  resolves to (no source gives per-unit/per-floor coordinates). 98.9% of transactions (6,893/6,970)
-  are geocoded; the remainder are ~8 buildings (Maxwell House, Realty Centre, Katong Plaza, Tanglin
-  Shopping Centre, …) no longer in OneMap's current address database — verified via direct address
-  search, not a query-formatting gap — almost certainly because they were sold en-bloc and
-  demolished/redeveloped since. Left blank on the map rather than guessed. The old 28-district-
-  centroid aggregate view is still available (§9) as an alternate "market-wide" view, not a
-  fallback for missing geocodes.
+  resolves to (no source gives per-unit/per-floor coordinates). Every transaction gets *some* point
+  (100% coverage) via a 3-tier fallback tagged in `geocode_precision`:
+  1. **`"building"`** (335 of 345 buildings, 6,893 of 6,970 transactions / 98.9%) — exact
+     block-number-and-street or project-name match.
+  2. **`"street"`** (10 buildings, 77 transactions / 1.1%) — the specific building is no longer in
+     OneMap's current address index (verified via direct address search, not a query-formatting
+     gap — almost certainly sold en-bloc and demolished/redeveloped since), so the point falls back
+     to wherever OneMap places its *street*, not the exact building. Shown faded on the
+     individual-transactions map (§9): **Chinatown Plaza** (34 Craig Road), **Katong Plaza** (1
+     Brooke Road), **Realty Centre** (15 Enggor Street), **Maxwell House** (20 Maxwell Road),
+     **Tanglin Shopping Centre** (19 Tanglin Road — matched to the adjacent Tanglin Halt Road, the
+     nearest street OneMap has), **Ming Arcade** (21 Cuscaden Road), **Certis Cisco Centre** (20
+     Jalan Afifi), **PIL Building** (140 Cecil Street).
+  There is no `"missing"` case currently (0 buildings) — see `geocode_buildings.py`'s
+  `_geocode_building` docstring if a future re-run does produce one. The old 28-district bubble
+  view is still available (§9) as an alternate "market-wide" view — a design choice for a
+  different zoom level, not a fallback for imprecise geocodes — and, since this commit, its bubble
+  *positions* are computed from these same real geocoded transactions (mean lat/lon per district),
+  not the old hand-set centroids (kept only as a last-resort fallback if a district has zero
+  geocoded transactions in the current filter).
 - **MRT distance is straight-line, not walking distance:** `dist_to_mrt_km` is haversine distance
   to the nearest of 613 station **exit** points (`Data/LTAMRTStationExit.geojson`, LTA), not actual
   street-network walking distance — a reasonable proxy for a descriptive dashboard, but will
@@ -511,10 +526,11 @@ chart) since there's no genuine monthly release for it.
 | Individual-transactions map — dot position | `lat`, `lon` | `Data/geocoded_buildings.csv`, built by `backend/geocode_buildings.py` from OneMap's Search API, joined onto `tx` by (`Project Name`, block+street address) — one point per **building**, not per unit (§8) |
 | Individual-transactions map — dot colour | `psf` | `Unit Price ($ PSF)` |
 | Individual-transactions map — green markers | `station`, `lat`, `lon` | `Data/LTAMRTStationExit.geojson` (LTA), via `load_mrt_stations()` |
-| District (aggregate) map — bubble position | `lat`, `lon` | **`DISTRICT_CENTROIDS`**, a hand-set dict of 28 approximate district centroids in `data_pipeline.py` — the coarse alternate view, kept alongside the individual-transactions map (§8) |
+| District (aggregate) map — bubble position | `lat`, `lon` | mean of that district's geocoded transaction `lat`/`lon` (§8); **`DISTRICT_CENTROIDS`** (hand-set dict, `data_pipeline.py`) only as a fallback if a district has zero geocoded transactions in the current filter |
 | District (aggregate) map — colour/size | `avg_psf`, `transactions` | `psf` ← `Unit Price ($ PSF)`, grouped by `postal_district` ← `Postal District` |
 | District ranking bar / detail table | `avg_psf`, `median_psf`, `psf`, `price`, `area_sqft` | `Unit Price ($ PSF)`, `Transacted Price ($)`, `Area (SQFT)`, grouped/filtered by `postal_district` |
-| Planning Area ranking | `avg_psf`, `median_psf`, `transactions` | as above, grouped by `sub_market` ← `Planning Area` |
+| Planning Area bubble map (Planning Area Rankings tab) | `lat`, `lon`, `avg_psf`, `transactions` | same `render_bubble_map` as the District aggregate view, grouped by `sub_market` ← `Planning Area` instead of `postal_district`; bubble position = mean of that area's geocoded transactions (no hand-set fallback exists at this granularity) |
+| Planning Area ranking bar / detail table | `avg_psf`, `median_psf`, `transactions` | as above, grouped by `sub_market` ← `Planning Area` |
 | CBD & Tenure Premium | `psf` split by `sub_market == 'Downtown Core'` and `tenure_type` | `Unit Price ($ PSF)`, `Planning Area`, `tenure_type` (derived from `Tenure`, §4) |
 | MRT-accessibility premium | `dist_to_mrt_km` (binned), `psf` | `dist_to_mrt_km` = haversine distance from `lat`/`lon` to the nearest MRT/LRT exit (`_nearest_mrt` in `data_pipeline.py`) |
 
