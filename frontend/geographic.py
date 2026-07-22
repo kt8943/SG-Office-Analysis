@@ -220,15 +220,23 @@ def render_detail_table(txf, where_col, where_val, title, download_stem):
                        key=f"dl_{download_stem}")
 
 
-def premium_bar_chart(txf, group_col, sort_order, color, x_title=None, height=300):
-    """One Premium Factors comparison: median $psf by category (`group_col`, already
-    a column on `txf`), with sample size in the tooltip."""
+def premium_bar_chart(txf, group_col, sort_order, x_title=None, height=300):
+    """One Premium Factors comparison: Average and Median $psf by category
+    (`group_col`, already a column on `txf`), as paired bars — same Average=blue/
+    Median=red convention as the Trends page's dual_line_chart, so the two pages
+    read consistently. Sample size is in the tooltip."""
     by = (txf.groupby(group_col, observed=True)
-          .agg(median_psf=("psf", "median"), transactions=("psf", "size")).reset_index())
-    st.altair_chart(alt.Chart(by).mark_bar(color=color).encode(
+          .agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
+               transactions=("psf", "size")).reset_index())
+    long = by.melt(id_vars=[group_col, "transactions"], value_vars=["avg_psf", "median_psf"],
+                   var_name="metric", value_name="psf_value")
+    long["metric"] = long["metric"].map({"avg_psf": "Average", "median_psf": "Median"})
+    st.altair_chart(alt.Chart(long).mark_bar().encode(
         x=alt.X(f"{group_col}:N", title=x_title, sort=sort_order),
-        y=alt.Y("median_psf:Q", title="Median $PSF", scale=alt.Scale(zero=False)),
-        tooltip=[f"{group_col}:N", alt.Tooltip("median_psf:Q", format=",.0f"),
+        xOffset=alt.XOffset("metric:N", sort=["Average", "Median"]),
+        y=alt.Y("psf_value:Q", title="$PSF", scale=alt.Scale(zero=False)),
+        color=alt.Color("metric:N", title=None, scale=alt.Scale(domain=["Average", "Median"], range=[BLUE, RED])),
+        tooltip=[f"{group_col}:N", "metric:N", alt.Tooltip("psf_value:Q", format=",.0f"),
                  alt.Tooltip("transactions:Q", format=",.0f")]
     ).properties(height=height), width="stretch")
 
@@ -359,7 +367,7 @@ with t4:
                      f"{(cbd/rest-1)*100:+.0f}% CBD premium" if rest else None)
         loc_txf = txf.assign(location=np.where(txf["sub_market"] == "Downtown Core",
                                                "Downtown Core", "Rest of market"))
-        premium_bar_chart(loc_txf, "location", ["Downtown Core", "Rest of market"], BLUE)
+        premium_bar_chart(loc_txf, "location", ["Downtown Core", "Rest of market"])
     with row1b:
         st.markdown("**Tenure premium** — Freehold vs. Leasehold")
         fh = txf[txf["tenure_type"] == "Freehold"]["psf"].median()
@@ -368,7 +376,7 @@ with t4:
         mc[0].metric("Freehold median $PSF", f"{fh:,.0f}")
         mc[1].metric("Leasehold median $PSF", f"{lh:,.0f}",
                      f"{(fh/lh-1)*100:+.0f}% freehold premium" if lh else None)
-        premium_bar_chart(txf, "tenure_type", ["Freehold", "Leasehold"], RED)
+        premium_bar_chart(txf, "tenure_type", ["Freehold", "Leasehold"])
 
     st.divider()
     row2a, row2b = st.columns(2)
@@ -377,21 +385,21 @@ with t4:
         floor_bins = [0, 5, 15, 100]
         floor_labels = ["Low (1–5F)", "Mid (6–15F)", "High (16F+)"]
         floor_txf = txf.assign(floor_tier=pd.cut(txf["floor"], floor_bins, labels=floor_labels))
-        premium_bar_chart(floor_txf, "floor_tier", floor_labels, BLUE)
+        premium_bar_chart(floor_txf, "floor_tier", floor_labels)
     with row2b:
         st.markdown("**Sale-type premium**")
-        premium_bar_chart(txf, "type_of_sale", ["New Sale", "Resale", "Sub Sale"], RED)
+        premium_bar_chart(txf, "type_of_sale", ["New Sale", "Resale", "Sub Sale"])
 
     st.divider()
     row3a, row3b = st.columns(2)
     with row3a:
         st.markdown("**Unit-size premium**")
         size_labels = ["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"]
-        premium_bar_chart(txf, "size_band", size_labels, BLUE)
+        premium_bar_chart(txf, "size_band", size_labels)
     with row3b:
         st.markdown("**Deal-size premium**")
         deal_labels = ["<$5M", "$5-10M", ">$10M"]
-        premium_bar_chart(txf, "deal_band", deal_labels, RED)
+        premium_bar_chart(txf, "deal_band", deal_labels)
 
     st.divider()
     row4a, row4b = st.columns(2)
@@ -403,7 +411,7 @@ with t4:
         else:
             st.caption("Number of distinct stations within a 5-min (400m) walk — a clean, "
                        "roughly monotonic premium in the current data.")
-            premium_bar_chart(count_txf, "mrt_count_400m", [0, 1, 2, 3], BLUE)
+            premium_bar_chart(count_txf, "mrt_count_400m", [0, 1, 2, 3])
     with row4b:
         st.markdown("**Interchange-access (400m) premium**")
         inter_txf = txf.dropna(subset=["lat", "lon"])
@@ -414,7 +422,7 @@ with t4:
                        "LTA's official station-line list, §8) — 0 = no station within 400m. "
                        "3-line interchanges stand out, but 1- vs 2-line isn't a clean step: "
                        "most of the effect is already captured by station density (left).")
-            premium_bar_chart(inter_txf, "max_lines_400m", [0, 1, 2, 3], RED)
+            premium_bar_chart(inter_txf, "max_lines_400m", [0, 1, 2, 3])
 
     st.divider()
     st.markdown("**MRT-accessibility premium**")
@@ -430,5 +438,5 @@ with t4:
         st.caption(f"{len(mrt_txf):,} geocoded transactions, straight-line distance to the "
                    f"nearest MRT/LRT exit. Correlation (distance vs $PSF): **{corr:+.2f}** "
                    f"(negative = pricier closer to a station, as expected).")
-        premium_bar_chart(mrt_txf, "mrt_band", band_labels, BLUE,
+        premium_bar_chart(mrt_txf, "mrt_band", band_labels,
                           x_title="Distance to nearest MRT/LRT", height=320)
