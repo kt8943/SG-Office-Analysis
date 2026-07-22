@@ -20,16 +20,14 @@ MACRO_GROUPS = {
         "PSF vs Interest Rate (SORA 3M)": ("sora_3m", "SORA 3M (%)"),
         "PSF vs 10Y Bond Yield": ("sgs_10y_yield", "SGS 10Y Bond Yield (%)"),
         "PSF vs GDP": ("gdp_growth", "GDP growth (YoY %, real)"),
+        "PSF vs SGD/USD Exchange Rate": ("sgd_usd_fx", "SGD per USD"),
     },
-    "Office Market Indices": {
+    "Office Market & Demand": {
         "PSF vs Rent Index": ("rent_index", "URA Office Rent Index"),
         "PSF vs Office Price Index": ("price_index", "URA Office Price Index"),
         "PSF vs Vacancy Rate": ("vacancy_rate", "Office Vacancy Rate (%)"),
         "PSF vs Supply Pipeline": ("supply_pipeline", "Supply Pipeline ('000 sqm)"),
-    },
-    "Employment & FX": {
         "PSF vs Office-Using Employment Change": ("office_employment_chg", "Employment chg ('000, qtr)"),
-        "PSF vs SGD/USD Exchange Rate": ("sgd_usd_fx", "SGD per USD"),
     },
     "Construction Costs": {
         "PSF vs Cement Price": ("price_cement", "Cement Price (bulk, $/tonne)"),
@@ -334,40 +332,39 @@ with t4:
 
 with t5:
     st.markdown("### Macro-Economic Indicators vs Office Market")
-    group_tabs = st.tabs(list(MACRO_GROUPS))
-    for grp_tab, (grp_name, factors) in zip(group_tabs, MACRO_GROUPS.items()):
-        with grp_tab:
-            subtabs = st.tabs(list(factors))
-            for st_tab, (name, (col, label)) in zip(subtabs, factors.items()):
-                with st_tab:
-                    s = agg.dropna(subset=[col])
-                    if len(s) < 2:
-                        st.info(f"No {label} data over the currently selected period/filters.")
-                        continue
-                    if gran == "Month":
-                        if col in NATIVE_MONTHLY_COLS:
-                            st.caption(f"{label} is a genuine monthly observation (not "
-                                       "forward-filled).")
-                        else:
-                            st.caption(f"{label} is sourced quarterly — at Month "
-                                       "granularity each quarter's value is repeated "
-                                       "across its 3 months (a step function), not a "
-                                       "genuine monthly observation.")
-                    corr = agg[["median_psf", col]].corr().iloc[0, 1]
-                    st.markdown(f"**Median $PSF vs {label}**  ·  correlation **{corr:+.2f}**")
-                    base = alt.Chart(agg).encode(x=alt.X("period_date:T", title=None))
-                    lp = base.mark_line(point=True, color=BLUE).encode(
-                        y=alt.Y("median_psf:Q", title="Median $PSF",
-                                axis=alt.Axis(titleColor=BLUE), scale=alt.Scale(zero=False)))
-                    lm = base.mark_line(point=True, color=RED, strokeDash=[4, 3]).encode(
-                        y=alt.Y(f"{col}:Q", title=label, axis=alt.Axis(titleColor=RED),
-                               scale=alt.Scale(zero=False)))
-                    st.altair_chart(alt.layer(lp, lm).resolve_scale(y="independent").properties(height=380),
-                                    width="stretch")
-                    with st.expander("AI Insight"):
-                        direction = ("moves with" if corr > 0.2 else "moves against" if corr < -0.2
-                                     else "shows little linear link to")
-                        st.markdown(f"Over {s['period'].iloc[0]}–{s['period'].iloc[-1]}, median $PSF "
-                                    f"**{direction}** {label} (correlation {corr:+.2f}). "
-                                    "Correlation is not causation; lead/lag effects need the modeling phase.")
-                    render_table(agg, ["period", "median_psf", col], f"macro_{col}")
+    grp_name = st.segmented_control("Theme", list(MACRO_GROUPS), default=list(MACRO_GROUPS)[0],
+                                    required=True, label_visibility="collapsed",
+                                    key="macro_group")
+    factors = MACRO_GROUPS[grp_name]
+    subtabs = st.tabs(list(factors))
+    for st_tab, (name, (col, label)) in zip(subtabs, factors.items()):
+        with st_tab:
+            s = agg.dropna(subset=[col])
+            if len(s) < 2:
+                st.info(f"No {label} data over the currently selected period/filters.")
+                continue
+            if gran == "Month":
+                if col in NATIVE_MONTHLY_COLS:
+                    st.caption(f"{label} is a genuine monthly observation (not forward-filled).")
+                else:
+                    st.caption(f"{label} is sourced quarterly — at Month granularity each "
+                               "quarter's value is repeated across its 3 months (a step "
+                               "function), not a genuine monthly observation.")
+            corr = agg[["median_psf", col]].corr().iloc[0, 1]
+            st.markdown(f"**Median $PSF vs {label}**  ·  correlation **{corr:+.2f}**")
+            base = alt.Chart(agg).encode(x=alt.X("period_date:T", title=None))
+            lp = base.mark_line(point=True, color=BLUE).encode(
+                y=alt.Y("median_psf:Q", title="Median $PSF",
+                        axis=alt.Axis(titleColor=BLUE), scale=alt.Scale(zero=False)))
+            lm = base.mark_line(point=True, color=RED, strokeDash=[4, 3]).encode(
+                y=alt.Y(f"{col}:Q", title=label, axis=alt.Axis(titleColor=RED),
+                       scale=alt.Scale(zero=False)))
+            st.altair_chart(alt.layer(lp, lm).resolve_scale(y="independent").properties(height=380),
+                            width="stretch")
+            with st.expander("AI Insight"):
+                direction = ("moves with" if corr > 0.2 else "moves against" if corr < -0.2
+                             else "shows little linear link to")
+                st.markdown(f"Over {s['period'].iloc[0]}–{s['period'].iloc[-1]}, median $PSF "
+                            f"**{direction}** {label} (correlation {corr:+.2f}). "
+                            "Correlation is not causation; lead/lag effects need the modeling phase.")
+            render_table(agg, ["period", "median_psf", col], f"macro_{col}")
