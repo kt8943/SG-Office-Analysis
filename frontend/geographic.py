@@ -1,4 +1,5 @@
-"""Geospatial Analysis page: district $PSF map (Google Maps), district & planning-area rankings, CBD/tenure premium."""
+"""Geospatial Analysis page: transaction/district/planning-area maps & rankings (Google
+Maps), plus location/tenure/floor/sale-type/MRT $PSF premium comparisons."""
 import json
 import os
 
@@ -148,8 +149,8 @@ def render_transaction_map(txf, mrt):
 
 
 st.title("Geospatial Analysis")
-st.caption("How location affects office pricing — district $PSF map, district & planning-area "
-           "rankings, and CBD / tenure premiums.")
+st.caption("How location affects office pricing — transaction, district, and planning-area "
+           "maps & rankings, plus location/tenure/floor/MRT price premiums.")
 
 tx, _ = load_data()
 tx, view_choice = type_filter(tx)
@@ -185,85 +186,97 @@ if txf.empty:
     st.stop()
 st.caption(f"{len(txf):,} {view_choice} transactions · {yr_range[0]}–{yr_range[1]}")
 
-t1, t2, t3 = st.tabs(["District Map & Rankings", "Planning Area Rankings", "CBD & Tenure Premium"])
+t1, t2, t3, t4 = st.tabs(["Transaction Map & Ranking", "District Map & Ranking",
+                          "Planning Area Map & Ranking", "Premium Factors"])
+
+# ---------------------------------------------------------------- individual transactions + building ranking
+with t1:
+    st.markdown("**Every transaction, at its real building location**")
+    render_transaction_map(txf, load_mrt_stations())
+
+    st.divider()
+    st.markdown("**Building ranking** — avg $psf by building")
+    bldg = (txf.groupby("Project Name")
+            .agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
+                 transactions=("psf", "size"), last_trade=("sale_date", "max")).reset_index())
+    n_bldg_all = len(bldg)
+    bldg = bldg[bldg["transactions"] >= 3].sort_values("avg_psf", ascending=False)
+    bldg["last_trade"] = bldg["last_trade"].dt.strftime("%Y-%m-%d")
+    st.caption(f"{len(bldg):,} of {n_bldg_all:,} buildings shown — fewer than 3 transactions "
+               "excluded (too few for a reliable average).")
+    st.dataframe(bldg.rename(columns={"Project Name": "building"})
+                .style.format({"avg_psf": "{:,.0f}", "median_psf": "{:,.0f}", "transactions": "{:,.0f}"}),
+                width="stretch", hide_index=True)
+    st.download_button("Download building ranking (CSV)", bldg.to_csv(index=False),
+                       file_name="building_ranking.csv", mime="text/csv", key="dl_bldg_rank")
 
 # ---------------------------------------------------------------- district map + ranking
-with t1:
-    map_mode = st.radio("Map detail", ["Individual transactions", "District (aggregate)"],
-                        horizontal=True, key="map_mode",
-                        help="Individual transactions: one dot per deal at its real geocoded "
-                             "building location, plus MRT/LRT stations. District (aggregate): "
-                             "one bubble per postal district (28 max), for a market-wide view.")
-
-    if map_mode == "Individual transactions":
-        st.markdown("**Every transaction, at its real building location**")
-        render_transaction_map(txf, load_mrt_stations())
-    else:
-        d = (txf.dropna(subset=["postal_district"]).groupby("postal_district")
-             .agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
-                  transactions=("psf", "size"), avg_price=("price", "mean"),
-                  lat=("lat", "mean"), lon=("lon", "mean")).reset_index())
-        d["district"] = d["postal_district"].astype(int)
-        d["label"] = d["district"].map(DISTRICT_LABELS)
-        # bubble position = mean of that district's real geocoded transactions; only
-        # fall back to the hand-set approximate centroid (DISTRICT_CENTROIDS) if a
-        # district has zero geocoded transactions in the current filter.
-        d["lat"] = d["lat"].fillna(d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[0]))
-        d["lon"] = d["lon"].fillna(d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[1]))
-        d = d.dropna(subset=["lat", "lon"])
-
-        left, right = st.columns([3, 2])
-        with left:
-            st.markdown("**Average office $PSF by district**")
-            render_bubble_map(d, "district")
-        with right:
-            st.markdown("**Avg $PSF ranking** — click a bar to see that district's transactions")
-            pick = alt.selection_point(fields=["district"], on="click", empty=False, name="pick")
-            rank = alt.Chart(d).mark_bar().encode(
-                y=alt.Y("label:N", sort="-x", title=None),
-                x=alt.X("avg_psf:Q", title="Avg $PSF"),
-                color=alt.Color("avg_psf:Q", scale=alt.Scale(scheme="viridis"), legend=None),
-                opacity=alt.condition(pick, alt.value(1.0), alt.value(0.45)),
-                tooltip=["label:N", alt.Tooltip("avg_psf:Q", format=",.0f"),
-                         alt.Tooltip("transactions:Q", format=",.0f")]
-            ).add_params(pick).properties(height=520)
-            event = st.altair_chart(rank, on_select="rerun", key="rank", width="stretch")
-
-        # which district is selected? (clicked bar, else the top-ranked district)
-        sel_dist = None
-        try:
-            rows = event.selection.get("pick") if event and event.selection else None
-            if rows:
-                sel_dist = int(rows[0]["district"])
-        except Exception:
-            sel_dist = None
-        if sel_dist is None:
-            sel_dist = int(d.sort_values("avg_psf", ascending=False).iloc[0]["district"])
-
-        # transaction-level detail for the selected district — queried with DuckDB (SQL)
-        tdf = txf[["Project Name", "Address", "sale_date", "area_sqft", "psf", "price",
-                   "tenure_type", "type_of_sale", "postal_district"]].copy()
-        tdf["postal_district"] = tdf["postal_district"].astype("Int64")
-        detail = duckdb.sql(f"""
-            SELECT "Project Name" AS project, Address AS address,
-                   strftime(sale_date, '%Y-%m-%d') AS sale_date,
-                   area_sqft, psf AS unit_psf, price AS transacted_price,
-                   tenure_type AS tenure, type_of_sale AS sale_type
-            FROM tdf
-            WHERE postal_district = {sel_dist}
-            ORDER BY sale_date DESC
-        """).df()
-
-        st.markdown(f"**Transactions in {DISTRICT_LABELS.get(sel_dist, sel_dist)}**  ·  {len(detail):,} records")
-        st.dataframe(detail.style.format({"area_sqft": "{:,.0f}", "unit_psf": "{:,.0f}",
-                                          "transacted_price": "{:,.0f}"}),
-                     width="stretch", hide_index=True)
-        st.download_button("Download transactions (CSV)", detail.to_csv(index=False),
-                           file_name=f"transactions_D{sel_dist:02d}.csv", mime="text/csv",
-                           key="dl_district_txn")
-
-# ---------------------------------------------------------------- planning area ranking
 with t2:
+    d = (txf.dropna(subset=["postal_district"]).groupby("postal_district")
+         .agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
+              transactions=("psf", "size"), avg_price=("price", "mean"),
+              lat=("lat", "mean"), lon=("lon", "mean")).reset_index())
+    d["district"] = d["postal_district"].astype(int)
+    d["label"] = d["district"].map(DISTRICT_LABELS)
+    # bubble position = mean of that district's real geocoded transactions; only
+    # fall back to the hand-set approximate centroid (DISTRICT_CENTROIDS) if a
+    # district has zero geocoded transactions in the current filter.
+    d["lat"] = d["lat"].fillna(d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[0]))
+    d["lon"] = d["lon"].fillna(d["district"].map(lambda x: DISTRICT_CENTROIDS.get(x, (None, None))[1]))
+    d = d.dropna(subset=["lat", "lon"])
+
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown("**Average office $PSF by district**")
+        render_bubble_map(d, "district")
+    with right:
+        st.markdown("**Avg $PSF ranking** — click a bar to see that district's transactions")
+        pick = alt.selection_point(fields=["district"], on="click", empty=False, name="pick")
+        rank = alt.Chart(d).mark_bar().encode(
+            y=alt.Y("label:N", sort="-x", title=None),
+            x=alt.X("avg_psf:Q", title="Avg $PSF"),
+            color=alt.Color("avg_psf:Q", scale=alt.Scale(scheme="viridis"), legend=None),
+            opacity=alt.condition(pick, alt.value(1.0), alt.value(0.45)),
+            tooltip=["label:N", alt.Tooltip("avg_psf:Q", format=",.0f"),
+                     alt.Tooltip("transactions:Q", format=",.0f")]
+        ).add_params(pick).properties(height=520)
+        event = st.altair_chart(rank, on_select="rerun", key="rank", width="stretch")
+
+    # which district is selected? (clicked bar, else the top-ranked district)
+    sel_dist = None
+    try:
+        rows = event.selection.get("pick") if event and event.selection else None
+        if rows:
+            sel_dist = int(rows[0]["district"])
+    except Exception:
+        sel_dist = None
+    if sel_dist is None:
+        sel_dist = int(d.sort_values("avg_psf", ascending=False).iloc[0]["district"])
+
+    # transaction-level detail for the selected district — queried with DuckDB (SQL)
+    tdf = txf[["Project Name", "Address", "sale_date", "area_sqft", "psf", "price",
+               "tenure_type", "type_of_sale", "postal_district"]].copy()
+    tdf["postal_district"] = tdf["postal_district"].astype("Int64")
+    detail = duckdb.sql(f"""
+        SELECT "Project Name" AS project, Address AS address,
+               strftime(sale_date, '%Y-%m-%d') AS sale_date,
+               area_sqft, psf AS unit_psf, price AS transacted_price,
+               tenure_type AS tenure, type_of_sale AS sale_type
+        FROM tdf
+        WHERE postal_district = {sel_dist}
+        ORDER BY sale_date DESC
+    """).df()
+
+    st.markdown(f"**Transactions in {DISTRICT_LABELS.get(sel_dist, sel_dist)}**  ·  {len(detail):,} records")
+    st.dataframe(detail.style.format({"area_sqft": "{:,.0f}", "unit_psf": "{:,.0f}",
+                                      "transacted_price": "{:,.0f}"}),
+                 width="stretch", hide_index=True)
+    st.download_button("Download transactions (CSV)", detail.to_csv(index=False),
+                       file_name=f"transactions_D{sel_dist:02d}.csv", mime="text/csv",
+                       key="dl_district_txn")
+
+# ---------------------------------------------------------------- planning area map + ranking
+with t3:
     pa = (txf.groupby("sub_market").agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
                                         transactions=("psf", "size"),
                                         lat=("lat", "mean"), lon=("lon", "mean")).reset_index())
@@ -325,8 +338,9 @@ with t2:
                        file_name=f"transactions_{sel_pa.replace(' ', '_')}.csv", mime="text/csv",
                        key="dl_pa_txn")
 
-# ---------------------------------------------------------------- CBD & tenure premium
-with t3:
+# ---------------------------------------------------------------- premium factors
+with t4:
+    st.markdown("**Location premium** — Downtown Core vs. rest of market")
     cbd = txf[txf["sub_market"] == "Downtown Core"]["psf"].median()
     rest = txf[txf["sub_market"] != "Downtown Core"]["psf"].median()
     fh = txf[txf["tenure_type"] == "Freehold"]["psf"].median()
@@ -349,6 +363,31 @@ with t3:
         color=alt.Color("kind:N", scale=alt.Scale(range=[BLUE, RED]), title=None),
         tooltip=["group:N", alt.Tooltip("median_psf:Q", format=",.0f")]
     ).properties(height=340), width="stretch")
+
+    st.divider()
+    st.markdown("**Floor-level premium**")
+    floor_bins = [0, 5, 15, 100]
+    floor_labels = ["Low (1–5F)", "Mid (6–15F)", "High (16F+)"]
+    by_floor = (txf.assign(floor_tier=pd.cut(txf["floor"], floor_bins, labels=floor_labels))
+               .groupby("floor_tier", observed=True)
+               .agg(median_psf=("psf", "median"), transactions=("psf", "size")).reset_index())
+    st.altair_chart(alt.Chart(by_floor).mark_bar(color=BLUE).encode(
+        x=alt.X("floor_tier:N", title=None, sort=floor_labels),
+        y=alt.Y("median_psf:Q", title="Median $PSF", scale=alt.Scale(zero=False)),
+        tooltip=["floor_tier:N", alt.Tooltip("median_psf:Q", format=",.0f"),
+                 alt.Tooltip("transactions:Q", format=",.0f")]
+    ).properties(height=300), width="stretch")
+
+    st.divider()
+    st.markdown("**Sale-type premium**")
+    by_sale = (txf.groupby("type_of_sale")
+              .agg(median_psf=("psf", "median"), transactions=("psf", "size")).reset_index())
+    st.altair_chart(alt.Chart(by_sale).mark_bar(color=RED).encode(
+        x=alt.X("type_of_sale:N", title=None, sort=["New Sale", "Resale", "Sub Sale"]),
+        y=alt.Y("median_psf:Q", title="Median $PSF", scale=alt.Scale(zero=False)),
+        tooltip=["type_of_sale:N", alt.Tooltip("median_psf:Q", format=",.0f"),
+                 alt.Tooltip("transactions:Q", format=",.0f")]
+    ).properties(height=300), width="stretch")
 
     st.divider()
     st.markdown("**MRT-accessibility premium**")

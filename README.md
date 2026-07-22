@@ -362,23 +362,26 @@ values fixes both — see §7 for why this is a pandas/UI choice, not a SQL one.
 Same top-level filters as Trends minus Planning Area/Floor/Size band (Year range, Type of sale,
 Tenure, Project name, Street), then tabs:
 
-- **District Map & Rankings** — a **Map detail** toggle picks the view. *Individual transactions*
-  (default) plots one Google Maps dot per geocoded transaction, colour = $psf, plus green MRT/LRT
-  exit markers (needs `GOOGLE_MAPS_API_KEY`, §1; geocoding via `backend/geocode_buildings.py`, §8).
-  *District (aggregate)* is the original 28-postal-district bubble map (bubble colour = avg $psf,
-  size = transaction count) with a clickable avg-$psf ranking bar chart — selecting a district (bar
-  click, or top-ranked by default) runs the DuckDB drill-down (§5, Step E) to list and download
-  that district's transactions. Only the aggregate view has the ranking chart/drill-down; the
-  individual-transactions map *is* the detail view, so there's nothing further to drill into.
-- **Planning Area Rankings** — opens with its own bubble map (same `render_bubble_map` as District
-  aggregate, just grouped by planning area instead of postal district), then avg $psf by URA
-  planning area (≥10 transactions only, to avoid unstable small-sample averages), clickable the
-  same way as the district ranking: selecting a bar (or the top-ranked area by default) runs a
-  parameterized DuckDB query (`WHERE sub_market = ?`) to list and download that area's
-  transactions.
-- **CBD & Tenure Premium** — median $psf: Downtown Core vs. rest of market, and Freehold vs.
-  Leasehold, as both KPI deltas and a grouped bar chart; plus an **MRT-accessibility premium**
-  chart (median $psf by distance-to-nearest-MRT band, §9) for geocoded transactions.
+- **Transaction Map & Ranking** — one Google Maps dot per geocoded transaction, colour = $psf,
+  plus green MRT/LRT exit markers (needs `GOOGLE_MAPS_API_KEY`, §1; geocoding via
+  `backend/geocode_buildings.py`, §8) — this map *is* the transaction-level detail view, so there's
+  no further drill-down. Below it, a **building ranking** table: avg/median $psf, transaction
+  count, and last trade date per building (`Project Name`), ≥3 transactions only (buildings with
+  fewer are too thin for a reliable average), sortable and downloadable.
+- **District Map & Ranking** — the 28-postal-district bubble map (bubble colour = avg $psf, size =
+  transaction count; position = mean of that district's real geocoded transactions, §8) with a
+  clickable avg-$psf ranking bar chart — selecting a district (bar click, or top-ranked by default)
+  runs the DuckDB drill-down (§5, Step E) to list and download that district's transactions.
+- **Planning Area Map & Ranking** — the same bubble map (`render_bubble_map`) grouped by planning
+  area instead of postal district, then avg $psf by URA planning area (≥10 transactions only, to
+  avoid unstable small-sample averages), clickable the same way as the district ranking: selecting
+  a bar (or the top-ranked area by default) runs a parameterized DuckDB query
+  (`WHERE sub_market = ?`) to list and download that area's transactions.
+- **Premium Factors** — four $psf comparisons, each its own chart: **Location** (Downtown Core vs.
+  rest of market) and **Tenure** (Freehold vs. Leasehold) as KPI deltas + a grouped bar chart;
+  **Floor tier** (Low/Mid/High, binned from `floor`); **Sale type** (New Sale / Resale / Sub Sale);
+  and **MRT-accessibility** (median $psf by distance-to-nearest-MRT band, §9, for geocoded
+  transactions only).
 
 ### Summary ([backend/data_summary.py](backend/data_summary.py))
 
@@ -440,7 +443,7 @@ grew to millions of rows or moved to a real database backend instead of an in-me
      OneMap's current address index (verified via direct address search, not a query-formatting
      gap — almost certainly sold en-bloc and demolished/redeveloped since), so the point falls back
      to wherever OneMap places its *street*, not the exact building. Shown faded on the
-     individual-transactions map (§9): **Chinatown Plaza** (34 Craig Road), **Katong Plaza** (1
+     Transaction Map (§9): **Chinatown Plaza** (34 Craig Road), **Katong Plaza** (1
      Brooke Road), **Realty Centre** (15 Enggor Street), **Maxwell House** (20 Maxwell Road),
      **Tanglin Shopping Centre** (19 Tanglin Road — matched to the adjacent Tanglin Halt Road, the
      nearest street OneMap has), **Ming Arcade** (21 Cuscaden Road), **Certis Cisco Centre** (20
@@ -523,16 +526,19 @@ chart) since there's no genuine monthly release for it.
 
 | On screen | Pipeline column(s) | Ultimate source |
 |---|---|---|
-| Individual-transactions map — dot position | `lat`, `lon` | `Data/geocoded_buildings.csv`, built by `backend/geocode_buildings.py` from OneMap's Search API, joined onto `tx` by (`Project Name`, block+street address) — one point per **building**, not per unit (§8) |
-| Individual-transactions map — dot colour | `psf` | `Unit Price ($ PSF)` |
-| Individual-transactions map — green markers | `station`, `lat`, `lon` | `Data/LTAMRTStationExit.geojson` (LTA), via `load_mrt_stations()` |
-| District (aggregate) map — bubble position | `lat`, `lon` | mean of that district's geocoded transaction `lat`/`lon` (§8); **`DISTRICT_CENTROIDS`** (hand-set dict, `data_pipeline.py`) only as a fallback if a district has zero geocoded transactions in the current filter |
-| District (aggregate) map — colour/size | `avg_psf`, `transactions` | `psf` ← `Unit Price ($ PSF)`, grouped by `postal_district` ← `Postal District` |
+| Transaction map — dot position | `lat`, `lon` | `Data/geocoded_buildings.csv`, built by `backend/geocode_buildings.py` from OneMap's Search API, joined onto `tx` by (`Project Name`, block+street address) — one point per **building**, not per unit (§8) |
+| Transaction map — dot colour | `psf` | `Unit Price ($ PSF)` |
+| Transaction map — green markers | `station`, `lat`, `lon` | `Data/LTAMRTStationExit.geojson` (LTA), via `load_mrt_stations()` |
+| Building ranking table | `avg_psf`, `median_psf`, `transactions`, `last_trade` | `Unit Price ($ PSF)`, `Sale Date` (max), grouped by `Project Name`, ≥3 transactions |
+| District map — bubble position | `lat`, `lon` | mean of that district's geocoded transaction `lat`/`lon` (§8); **`DISTRICT_CENTROIDS`** (hand-set dict, `data_pipeline.py`) only as a fallback if a district has zero geocoded transactions in the current filter |
+| District map — bubble colour/size | `avg_psf`, `transactions` | `psf` ← `Unit Price ($ PSF)`, grouped by `postal_district` ← `Postal District` |
 | District ranking bar / detail table | `avg_psf`, `median_psf`, `psf`, `price`, `area_sqft` | `Unit Price ($ PSF)`, `Transacted Price ($)`, `Area (SQFT)`, grouped/filtered by `postal_district` |
-| Planning Area bubble map (Planning Area Rankings tab) | `lat`, `lon`, `avg_psf`, `transactions` | same `render_bubble_map` as the District aggregate view, grouped by `sub_market` ← `Planning Area` instead of `postal_district`; bubble position = mean of that area's geocoded transactions (no hand-set fallback exists at this granularity) |
+| Planning Area map | `lat`, `lon`, `avg_psf`, `transactions` | same `render_bubble_map` as the District map, grouped by `sub_market` ← `Planning Area` instead of `postal_district`; bubble position = mean of that area's geocoded transactions (no hand-set fallback exists at this granularity) |
 | Planning Area ranking bar / detail table | `avg_psf`, `median_psf`, `transactions` | as above, grouped by `sub_market` ← `Planning Area` |
-| CBD & Tenure Premium | `psf` split by `sub_market == 'Downtown Core'` and `tenure_type` | `Unit Price ($ PSF)`, `Planning Area`, `tenure_type` (derived from `Tenure`, §4) |
-| MRT-accessibility premium | `dist_to_mrt_km` (binned), `psf` | `dist_to_mrt_km` = haversine distance from `lat`/`lon` to the nearest MRT/LRT exit (`_nearest_mrt` in `data_pipeline.py`) |
+| Premium Factors — Location/Tenure | `psf` split by `sub_market == 'Downtown Core'` and `tenure_type` | `Unit Price ($ PSF)`, `Planning Area`, `tenure_type` (derived from `Tenure`, §4) |
+| Premium Factors — Floor tier | `psf` split by `floor` binned Low(1–5)/Mid(6–15)/High(16+) | `Unit Price ($ PSF)`, `floor` (regex from `Address`, §4) |
+| Premium Factors — Sale type | `psf` split by `type_of_sale` | `Unit Price ($ PSF)`, `Type of Sale` |
+| Premium Factors — MRT-accessibility | `dist_to_mrt_km` (binned), `psf` | `dist_to_mrt_km` = haversine distance from `lat`/`lon` to the nearest MRT/LRT exit (`_nearest_mrt` in `data_pipeline.py`) |
 
 `pmet_employment` (`load_employment_annual()`, ← `Number of Employed Residents by Occupation.csv`)
 is loaded but **not wired into any chart yet** — it's annual-only and would need an explicit
