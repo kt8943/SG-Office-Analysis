@@ -2,10 +2,12 @@
 
 This project turns raw Singapore office-market CSVs into an interactive **multipage Streamlit
 dashboard** (Overview / Trends / Geospatial Analysis) and a **data-summary utility**
-([backend/data_summary.py](backend/data_summary.py)). It focuses on **strata office sale transactions** and
-enriches them with market, macro, and location context. This README explains exactly how the raw
-files are cleaned, engineered, merged — and, in detail, **why** each cleaning/statistical choice
-was made, since several of them materially change the numbers shown.
+([backend/data_summary.py](backend/data_summary.py)). It focuses on **strata office sale
+transactions** (individual unit sales; whole-building/site "Land" sales are kept but shown
+separately via a Transaction Type filter, §3.1) and enriches them with market, macro, and location
+context. This README explains exactly how the raw files are cleaned, engineered, merged — and, in
+detail, **why** each cleaning/statistical choice was made, since several of them materially change
+the numbers shown.
 
 > **Scope note.** ~92% of transactions are in the **Central Region**, so all market/macro series
 > use the **Central** geography. Whole-building/mis-recorded en-bloc deals are excluded (§3.1).
@@ -52,21 +54,49 @@ plain error instead of the map; nothing else in the app depends on it.
 
 ## 2. Source files and what we take from each
 
-Everything is joined on a common **quarter** (or **year**) key.
+Everything is joined on a common **quarter** (or **year**, or **month** for the natively-monthly
+table — §3.3b) key. Loader column: which function in `backend/data_pipeline.py` reads it.
 
-| Raw file (`Data/`) | Column used | Becomes | Native freq |
-|---|---|---|---|
-| `CommercialTransaction_byProject.csv` | many | transaction records (target + property features) | per-transaction |
-| `Property Price Index of Office Space.csv` | *…Central Region (INDEX)* | `price_index` | quarterly |
-| `Rental Index of Private Sector Office Space.csv` | *…Central Region (INDEX)* | `rent_index` | quarterly |
-| `Vacancy Rate of Private Sector Office Space.csv` | *…Central Region (per cent)* | `vacancy_rate` | quarterly |
-| `Private Sector Office Space under Construction:Pipeline:Planned Supply.csv` | *Supply…in the Pipeline* | `supply_pipeline` | quarterly |
-| `GDP Growth Rate.csv` | *GDP At Current Market Prices* | `gdp_growth` | quarterly (DOS wide) |
-| `CPI quarterly.csv` | *All Items* | `cpi` | quarterly (DOS wide) |
-| `Domestic Interest Rates (9).csv` | *Compound SORA - 3 month* | `sora_3m` | daily (MAS) |
-| `quarterly overall unemployment rate.csv` | *seasonally_adjusted…* | `unemployment` | quarterly |
+| Raw file (`Data/`) | Column used | Becomes | Native freq | Loader |
+|---|---|---|---|---|
+| `CommercialTransaction_byProject.csv` | many | transaction records (target + property features) | per-transaction | `load_data` |
+| `Property Price Index of Office Space.csv` | *…Central Region (INDEX)* | `price_index` | quarterly | `_load_market` |
+| `Rental Index of Private Sector Office Space.csv` | *…Central Region (INDEX)* | `rent_index` | quarterly | `_load_market` |
+| `Vacancy Rate of Private Sector Office Space.csv` | *…Central Region (per cent)* | `vacancy_rate` | quarterly | `_load_market` |
+| `Private Sector Office Space under Construction:Pipeline:Planned Supply.csv` | *Supply…in the Pipeline ('000 SQ M GROSS)* | `supply_pipeline` | quarterly | `_load_market` |
+| `GDP Growth Rate.csv` | *GDP In Chained (2015) Dollars* (real, not nominal — see §3.3) | `gdp_growth` | quarterly (DOS wide) | `_load_dos_wide` |
+| `CPI quarterly.csv` | *All Items* | `cpi` (quarterly table) | quarterly (DOS wide) | `_load_dos_wide` |
+| `Domestic Interest Rates (9).csv` | *Compound SORA - 3 month* | `sora_3m` (quarterly table: daily→quarterly mean) | daily (MAS) | inline in `load_data` |
+| `quarterly overall unemployment rate.csv` | *seasonally_adjusted_unemployment_rate*, `residential_status == 'overall'` | `unemployment` | quarterly | inline in `load_data` |
+| `Quarterly Employ​ment Change by Industry.csv`¹ | *employment_change*, summed over office-using `industry2` labels (§3.3) | `office_employment_chg` | quarterly | inline in `load_data` |
+| `CPI monthly.csv` | *All Items* | `cpi` (**monthly table**, genuine observation) | monthly (DOS wide) | `_load_dos_wide_monthly` via `load_market_monthly` |
+| `Domestic Interest Rates (9).csv` | *Compound SORA - 3 month* | `sora_3m` (**monthly table**: daily→monthly mean) | daily (MAS) | `load_market_monthly` |
+| `SGS - Historical Prices and Yields - Benchmark Issues (Monthly).csv` | *10-Year Bond Yield* | `sgs_10y_yield` | monthly (MAS) | `_load_mas_monthly` |
+| `Exchange Rates (Monthly).csv` | *S$ Per Unit of US Dollar* | `sgd_usd_fx` | monthly (MAS) | `_load_mas_monthly` |
+| `Construction Material Market Prices Monthly.csv` | *Cement In Bulk (Ordinary Portland Cement)* | `price_cement` | monthly | `_load_construction_materials` |
+| `Construction Material Market Prices Monthly.csv` | *Steel Reinforcement Bars (16-32mm High Tensile)* | `price_steel_rebar` | monthly | `_load_construction_materials` |
+| `Construction Material Market Prices Monthly.csv` | *Granite (20mm Aggregate)* | `price_granite` | monthly | `_load_construction_materials` |
+| `Construction Material Market Prices Monthly.csv` | *Concreting Sand* | `price_sand` | monthly | `_load_construction_materials` |
+| `Construction Material Market Prices Monthly.csv` | *Ready Mixed Concrete* | `price_concrete` | monthly | `_load_construction_materials` |
+| `Number of Employed Residents by Occupation.csv` | *employed*, summed over PMET occupations | `pmet_employment` | annual | `load_employment_annual` (loaded, **not yet wired into any chart**) |
 
-`CommercialTransaction_byStreet.csv` is byte-identical to `_byProject` and is ignored.
+¹ filename contains a zero-width space between "Employ" and "ment" in the raw export; located via
+`glob.glob(...)` rather than a literal path — see `_load_construction_materials`'s neighbour in
+`load_data`.
+
+`CommercialTransaction_byStreet.csv` and `Annual Employment Level by Industry.xlsx` are not used
+(§3.3 explains why for the latter). `Exchange Rates (Daily).csv` and `SGS - Historical Prices and
+Yields - Benchmark Issues.csv` (the daily version) are superseded by their Monthly counterparts
+above and are not read by the pipeline.
+
+**Two tables, two frequencies.** `load_data()` returns the **quarterly** `market` table (used at
+Quarter/Year granularity); `load_market_monthly()` returns a **separate, genuinely-monthly** table
+for the 9 series that actually publish monthly (`cpi`, `sora_3m`, `sgs_10y_yield`, `sgd_usd_fx`,
+the 5 material prices). At Month granularity, `trends.py`'s `aggregate()` merges in the real
+monthly table for those 9 columns and falls back to forward-filling the quarterly `market` table
+(`market_monthly()`, a step function) only for columns with no monthly source (`price_index`,
+`rent_index`, `vacancy_rate`, `supply_pipeline`, `gdp_growth`, `office_employment_chg`,
+`unemployment`) — see §9 for which is which per chart.
 
 ---
 
@@ -74,10 +104,14 @@ Everything is joined on a common **quarter** (or **year**) key.
 
 ### 3.1 Transactions
 1. Read with `thousands=','`; parse `Sale Date` as `%d %b %Y`.
-2. Keep only `Type of Area == 'Strata'` (removes 74 `Land` / en-bloc rows on a different $PSF basis).
-3. **Drop mis-recorded en-bloc rows** — `Unit Price ($ PSF) < 50,000` (see method below).
+2. Keep both `Type of Area` values (`type_of_area` column) — **Strata** (individual unit sales,
+   6,896 rows) and **Land** (whole-building/site sales, priced per sqft of land not unit area, 74
+   rows). They are never pooled in a chart (§4); the sidebar **Transaction Type** filter
+   (`type_filter`, defaults to Strata) picks which the user sees on every page.
+3. **Drop mis-recorded en-bloc rows** — `Unit Price ($ PSF) < 50,000` (see method below). This only
+   ever removes Strata rows; Land $psf tops out around $39,000 on a different basis entirely.
 
-Result: **6,896** clean strata transactions, 2010-01 → 2026-06.
+Result: **6,896** clean Strata + **74** Land transactions, 2010-01 → 2026-06.
 
 #### Method: how the en-bloc filter was derived
 
@@ -124,12 +158,34 @@ coerced to numeric, and reshaped to a long `quarter, value` table (`_load_market
 ### 3.3 Macro series (need reshaping)
 - **GDP & CPI** are SingStat "DOS wide" exports (~10 metadata rows, then periods as *columns*).
   `_load_dos_wide` finds the `Data Series` header row, reads from there, selects the target series
-  row (`GDP At Current Market Prices` / `All Items`), and transposes the `YYYY nQ` columns into a
-  long `quarter, value` table.
+  row (`GDP In Chained (2015) Dollars` — **real** growth, not `GDP At Current Market Prices`
+  nominal, since nominal growth mixes inflation into the signal, e.g. it shows +33.7% in 2021Q2 /
+  `All Items`), and transposes the `YYYY nQ` columns into a long `quarter, value` table.
 - **SORA** is a daily MAS export (6 header lines skipped). We parse `SORA Publication Date`, take
-  `Compound SORA - 3 month`, and aggregate **daily → quarterly mean**.
+  `Compound SORA - 3 month`, and aggregate **daily → quarterly mean** (and, separately, **daily →
+  monthly mean** for `load_market_monthly()`).
 - **Unemployment** is filtered to `residential_status == 'overall'`; the month is mapped to a
   quarter and the seasonally-adjusted rate kept.
+- **Office-using employment change** sums `employment_change` over SSIC `industry2` labels that
+  cover finance/insurance, real estate and professional services. The SSIC label set was revised
+  twice across 1991–2026; verified non-overlapping by quarter before summing (`data_pipeline.py`
+  comment above the merge has the full label-era mapping) — no double-counting risk.
+
+### 3.3b Natively-monthly series (`load_market_monthly`, separate from `market`)
+
+- **CPI monthly** and the two **MAS "Financial Database" monthly** exports (10Y SGS yield, SGD/USD
+  FX) each use a different raw layout (`_load_dos_wide_monthly` vs `_load_mas_monthly`) but the
+  same principle: use the value **as published** for that month, never re-derive it from a finer
+  source. The MAS format blank-fills the year after January, so the year column is forward-filled
+  before parsing.
+- **Construction materials** (`_load_construction_materials`) melts one wide CSV (5 materials ×
+  month columns) into 5 separate columns — deliberately **not** combined into a single cost index,
+  since the materials are on very different scales/units (steel ≈ $700/tonne vs granite ≈
+  $25/tonne) and SingStat doesn't publish weights the way BCA's own Tender Price Index does;
+  averaging them unweighted would fabricate a precision the source data doesn't have.
+- These 9 columns are the only ones with a genuine monthly observation (`NATIVE_MONTHLY_COLS` in
+  `trends.py`); every other market/macro column reaches Month granularity only via forward-fill
+  (§2's "Two tables, two frequencies" note).
 
 ### 3.4 Why report median $psf (and show mean alongside it)
 
@@ -174,10 +230,14 @@ Derived in `load_data`:
 | `area_sqft` | `Area (SQFT)` |
 | `quarter` / `year` / `month` / `quarter_of_year` | from `Sale Date` |
 | `sub_market` | `Planning Area` (URA planning areas — shown as "Planning Area" in the UI) |
+| `postal_district` | `Postal District`, coerced numeric — drives the Geospatial district map/ranking |
 | `tenure_type` | `Freehold` if `Tenure` contains "Freehold"/"999", else `Leasehold` |
+| `type_of_area` | `Type of Area` (`Strata` / `Land`) — drives the sidebar Transaction Type filter |
 | `size_band` | bins of area: `<=500 / 500-1k / 1k-2k / 2k-5k / >5k` sqft |
 | `type_of_sale` | `Type of Sale` (Resale / New Sale / Sub Sale) |
-| `floor` | regex `#(\d+)-` from `Address` (~97% coverage), median-imputed otherwise |
+| `floor` | regex `#(\d+)-` from `Address` (~97% coverage); `floor_imputed` flags the rest, median-filled |
+| `deal_band` | bins of `price`: `<$5M / $5-10M / >$10M` (loaded, not yet wired into any chart) |
+| `street` | `Address` with leading house number(s) and `#unit` suffix stripped (regex) — feeds the Street filter (Trends, Geospatial) |
 | `real_psf` | `psf × 100 / cpi` — CPI-deflated $PSF (2024 base), via a quarter join to `cpi` |
 
 ---
@@ -186,18 +246,25 @@ Derived in `load_data`:
 
 **Step A — build one market table (`market`).**
 Start from `price_index`, then **outer-merge on `quarter`** each of `rent_index`, `vacancy_rate`,
-`supply_pipeline`, then `gdp_growth`, `cpi`, `sora_3m` (daily→quarterly), and `unemployment`.
-Outer joins keep every quarter any series covers; missing cells stay `NaN`.
+`supply_pipeline`, then `gdp_growth`, `cpi`, `sora_3m` (daily→quarterly), `unemployment`, and
+`office_employment_chg`. Outer joins keep every quarter any series covers; missing cells stay `NaN`.
 
 ```
 price_index ─(outer on quarter)─ rent_index ─ vacancy_rate ─ supply_pipeline
-            ─ gdp_growth ─ cpi ─ sora_3m(qtr mean) ─ unemployment  ->  market
+            ─ gdp_growth ─ cpi ─ sora_3m(qtr mean) ─ unemployment
+            ─ office_employment_chg  ->  market
 ```
+
+**Step A2 — build the separate natively-monthly table (`load_market_monthly`).** Same outer-merge
+pattern, on `month` instead of `quarter`: `cpi` (monthly) ─ `sora_3m` (daily→monthly mean) ─
+`sgs_10y_yield` ─ `sgd_usd_fx` ─ the 5 construction-material price columns. This table is **not**
+merged into `market` — it's a separate frequency, joined in only at the point of use (Step D).
 
 **Step B — deflate.** `cpi` is merged into the transaction table on `quarter` to compute `real_psf`.
 
 **Step C — aggregate transactions (`aggregate`).**
-Group the (filtered) transactions by `quarter` **or** `year` and compute:
+Group the (filtered) transactions by `month`, `quarter`, **or** `year` (the Trends page's
+Granularity radio) and compute:
 
 | Metric | How |
 |---|---|
@@ -208,12 +275,20 @@ Group the (filtered) transactions by `quarter` **or** `year` and compute:
 | `median_psf`, `mean_psf` | median / mean of `psf` |
 | `median_real_psf` | median of `real_psf` |
 
-**Step D — attach market/macro to each period.**
-- *Quarter view:* left-join `market` on `quarter`.
-- *Year view:* first collapse `market` to a **yearly mean**, then left-join on `year`.
+**Step D — attach market/macro to each period.** Every branch also merges in the natively-monthly
+table from Step A2, downsampled with `downsample_market_monthly` (mean) when the granularity is
+coarser than month; the `cpi`/`sora_3m` columns from `market` are dropped first so the genuinely-
+monthly observation always wins over the quarterly one for those two columns (§2, §3.3b).
+
+- *Month view:* left-join `market_monthly(market)` (forward-filled quarterly → month) on `month`,
+  then left-join the natively-monthly table on `month`.
+- *Quarter view:* left-join `market` on `quarter`, then left-join the natively-monthly table
+  downsampled to quarter (mean) on `quarter`.
+- *Year view:* first collapse `market` to a **yearly mean**, then left-join on `year`; same for the
+  natively-monthly table downsampled to year.
 
 The result is one row per period with transaction metrics **and** market/macro context — this
-feeds every chart and the bottom data table.
+feeds every chart and the bottom data table. See §9 for exactly which source backs each chart.
 
 **Step E — ad-hoc SQL drill-down (Geospatial page only).** Clicking a district on the map/ranking
 chart runs a `duckdb.sql(...)` query **directly against the in-memory transactions DataFrame**
@@ -231,13 +306,16 @@ lives in `frontend/`), plus a standalone summary script.
 ### Overview ([frontend/overview.py](frontend/overview.py))
 
 Landing page: headline KPI cards (transaction count, period covered, planning-area count, median
-$psf), what the app does, a page guide, and the data/method notes shown in §3–4 above in
-condensed form (source, scope, en-bloc exclusion, real-$psf definition).
+$psf) for the current Transaction Type selection, what the app does, a page guide, and the
+data/method notes shown in §3–4 above in condensed form (source, scope, Strata/Land distinction,
+real-$psf definition).
 
 ### Trends ([frontend/trends.py](frontend/trends.py))
 
 Top **filter bar** (Year range, Planning Area, Type of sale, Floor range, Tenure, Size band /
-area level, Project name, Street) → **KPI cards** (with period-on-period deltas) → **pill tabs**:
+area level, Project name, Street) → **Granularity** radio (Year / Quarter / Month) → **KPI cards**
+(median $PSF, avg price, transaction count, total value — summarising the *whole* current
+selection, not just the latest period) → **pill tabs**:
 
 - **Avg Price** — **Average and Median** transacted price plotted as two lines on one $ axis
   (both are the same unit/scale, so this isn't a dual-axis chart — see §3.4 for why the two can
@@ -247,9 +325,12 @@ area level, Project name, Street) → **KPI cards** (with period-on-period delta
   (CPI-deflated).
 - **Transaction Volume** — toggle between **count / total area (sqft) / total value ($)**.
 - **Seasonality** — year × month median-$PSF heatmap + median $PSF by month (peaks highlighted).
-- **Macro Factors** — sub-tabs: Price vs CPI / Interest Rate / GDP / Rent Index / Office Price
-  Index (dual-axis + correlation, since these compare $psf against a *different-scale* series —
-  the one place a genuine dual-axis chart is used).
+- **Macro Factors** — an outer `st.segmented_control` picks one of **3 themes** (Rates &
+  Inflation / Office Market & Demand / Construction Costs), each with its own inner `st.tabs` of
+  5–6 specific factors (16 in total) — dual-axis line + correlation for each, since these compare
+  $psf against a *different-scale* series (the one place a genuine dual-axis chart is used). The
+  two navigation levels are deliberately different widget types (segmented control vs. tabs) so
+  the theme/factor hierarchy stays visually distinct. Full list and sources: §9.
 
 A **"Break down by Planning Area"** toggle switches the Avg Price / PSF tabs to a single-metric
 view split into the top-6 areas as separate lines (average-vs-median overlay is dropped in this
@@ -267,7 +348,8 @@ values fixes both — see §7 for why this is a pandas/UI choice, not a SQL one.
 
 ### Geospatial Analysis ([frontend/geographic.py](frontend/geographic.py))
 
-Same top-level filters (Year range, Type of sale, Tenure), then tabs:
+Same top-level filters as Trends minus Planning Area/Floor/Size band (Year range, Type of sale,
+Tenure, Project name, Street), then tabs:
 
 - **District Map & Rankings** — Google Maps bubble map of the 28 postal districts (bubble color =
   avg $psf, size = transaction count; needs `GOOGLE_MAPS_API_KEY`, §1), plus a clickable avg-$psf
@@ -329,6 +411,84 @@ grew to millions of rows or moved to a real database backend instead of an in-me
   those releases lag transactions.
 - **Freehold `building_age`/lease:** only leasehold has a parseable lease start; freehold is
   flagged via `tenure_type` rather than given an age.
-- **Not yet added (external):** 10Y SGS yield, STI/S-REIT, SGD FX, office-using employment, BCA
-  construction cost, policy events, and OneMap geocoding (`lat/lon`, distances) are planned but not
-  in `Data/` yet.
+- **No per-transaction geocoding:** the Geospatial map plots 28 **static, hand-set district
+  centroids** (`DISTRICT_CENTROIDS` in `data_pipeline.py`) — one approximate lat/lon per postal
+  district, not a real coordinate per transaction. There is no MRT station data and no
+  distance-to-MRT/CBD feature. See §9 for exactly which chart this affects.
+- **Still not added (external):** STI/S-REIT index, BCA's weighted Tender Price Index (only raw,
+  unweighted material prices are in, §3.3b), and policy-event markers beyond the two hardcoded
+  COVID/Rate-Hike labels (`EVENTS` in `trends.py`). *Now added* since the list below was first
+  written: 10Y SGS yield, SGD FX, office-using employment change, unemployment, and 5 construction
+  material prices (§2).
+
+---
+
+## 9. Chart → variable → source (every visual, exact provenance)
+
+Every column name here is defined in §2 (source file/column), §3 (cleaning) or §4 (transaction
+features). This section exists so any number on screen can be traced back to a raw file without
+reading code.
+
+### Overview page charts
+
+| On screen | Pipeline column(s) | Ultimate source |
+|---|---|---|
+| Transactions (KPI) | `len(tx)` after `type_filter` | `CommercialTransaction_byProject.csv` |
+| Period (KPI) | `tx['year'].min()/.max()` | derived from `Sale Date` |
+| Planning areas (KPI) | `tx['sub_market'].nunique()` | `Planning Area` |
+| Median $PSF (KPI) | `tx['psf'].median()` | `Unit Price ($ PSF)` |
+
+### Trends page charts
+
+| On screen | Pipeline column(s) | Ultimate source |
+|---|---|---|
+| KPI cards (Median $PSF, Avg price, Transactions, Total value) | `psf`, `price` on filtered `txf` | `Unit Price ($ PSF)`, `Transacted Price ($)` |
+| Avg Price tab | `avg_price` (mean), `median_price` (median) | `price` ← `Transacted Price ($)` |
+| PSF tab | `mean_psf`, `median_psf` | `psf` ← `Unit Price ($ PSF)` |
+| PSF tab, real-$psf column | `median_real_psf` | `psf × 100 / cpi`; `cpi` ← `CPI quarterly.csv` "All Items" |
+| Transaction Volume tab | `volume` / `total_area` / `total_value` | count / sum of `area_sqft` (`Area (SQFT)`) / sum of `price` |
+| Seasonality tab | `psf` grouped by `year`, `month` | `Unit Price ($ PSF)`, `Sale Date` |
+| "Break down by Planning Area" | `sub_market` (top 6 by count) | `Planning Area` |
+| **Macro Factors** — see 3 groups below | `median_psf` (always the left axis) | `Unit Price ($ PSF)` |
+
+**Macro Factors right-axis series** (`col` in `MACRO_GROUPS`, `frontend/trends.py`):
+
+| Theme | Sub-tab | Pipeline column | Source file → column | Native freq |
+|---|---|---|---|---|
+| Rates & Inflation | PSF vs CPI | `cpi` | `CPI quarterly.csv`/`CPI monthly.csv` → *All Items* | quarterly + monthly |
+| Rates & Inflation | PSF vs Interest Rate (SORA 3M) | `sora_3m` | `Domestic Interest Rates (9).csv` → *Compound SORA - 3 month* | daily → qtr/mth mean |
+| Rates & Inflation | PSF vs 10Y Bond Yield | `sgs_10y_yield` | `SGS - Historical Prices and Yields - Benchmark Issues (Monthly).csv` → *10-Year Bond Yield* | monthly only |
+| Rates & Inflation | PSF vs GDP | `gdp_growth` | `GDP Growth Rate.csv` → *GDP In Chained (2015) Dollars* | quarterly |
+| Rates & Inflation | PSF vs SGD/USD Exchange Rate | `sgd_usd_fx` | `Exchange Rates (Monthly).csv` → *S$ Per Unit of US Dollar* | monthly only |
+| Office Market & Demand | PSF vs Rent Index | `rent_index` | `Rental Index of Private Sector Office Space.csv` → *…Central Region (INDEX)* | quarterly |
+| Office Market & Demand | PSF vs Office Price Index | `price_index` | `Property Price Index of Office Space.csv` → *…Central Region (INDEX)* | quarterly |
+| Office Market & Demand | PSF vs Vacancy Rate | `vacancy_rate` | `Vacancy Rate of Private Sector Office Space.csv` → *…Central Region (per cent)* | quarterly |
+| Office Market & Demand | PSF vs Supply Pipeline | `supply_pipeline` | `Private Sector Office Space under Construction:Pipeline:Planned Supply.csv` → *Supply…in the Pipeline ('000 SQ M GROSS)* | quarterly |
+| Office Market & Demand | PSF vs Office-Using Employment Change | `office_employment_chg` | `Quarterly Employ​ment Change by Industry.csv` → *employment_change*, summed over finance/real-estate/professional-services `industry2` labels | quarterly |
+| Office Market & Demand | PSF vs Unemployment Rate | `unemployment` | `quarterly overall unemployment rate.csv` → *seasonally_adjusted_unemployment_rate*, `residential_status == 'overall'` | quarterly |
+| Construction Costs | PSF vs Cement Price | `price_cement` | `Construction Material Market Prices Monthly.csv` → *Cement In Bulk (Ordinary Portland Cement)* | monthly only |
+| Construction Costs | PSF vs Steel Rebar Price | `price_steel_rebar` | same file → *Steel Reinforcement Bars (16-32mm High Tensile)* | monthly only |
+| Construction Costs | PSF vs Granite Price | `price_granite` | same file → *Granite (20mm Aggregate)* | monthly only |
+| Construction Costs | PSF vs Sand Price | `price_sand` | same file → *Concreting Sand* | monthly only |
+| Construction Costs | PSF vs Ready-Mix Concrete Price | `price_concrete` | same file → *Ready Mixed Concrete* | monthly only |
+
+"Native freq: monthly only" means that series has **no quarterly source at all** — the quarterly
+`market` table simply doesn't carry it, so at Quarter/Year granularity it's the *monthly* table
+downsampled by mean (§3.3b), never a forward-fill. Every other row is quarterly-sourced and, at
+Month granularity, is forward-filled (a step function, flagged in-app by the caption under each
+chart) since there's no genuine monthly release for it.
+
+### Geospatial page charts
+
+| On screen | Pipeline column(s) | Ultimate source |
+|---|---|---|
+| District bubble map — position | `lat`, `lon` | **`DISTRICT_CENTROIDS`**, a hand-set dict of 28 approximate district centroids in `data_pipeline.py` — **not** geocoded per transaction (§8) |
+| District bubble map — colour/size | `avg_psf`, `transactions` | `psf` ← `Unit Price ($ PSF)`, grouped by `postal_district` ← `Postal District` |
+| District ranking bar / detail table | `avg_psf`, `median_psf`, `psf`, `price`, `area_sqft` | `Unit Price ($ PSF)`, `Transacted Price ($)`, `Area (SQFT)`, grouped/filtered by `postal_district` |
+| Planning Area ranking | `avg_psf`, `median_psf`, `transactions` | as above, grouped by `sub_market` ← `Planning Area` |
+| CBD & Tenure Premium | `psf` split by `sub_market == 'Downtown Core'` and `tenure_type` | `Unit Price ($ PSF)`, `Planning Area`, `tenure_type` (derived from `Tenure`, §4) |
+
+`pmet_employment` (`load_employment_annual()`, ← `Number of Employed Residents by Occupation.csv`)
+is loaded but **not wired into any chart yet** — it's annual-only and would need an explicit
+annual→quarter/month expansion decision before use (§3.3b's docstring explains why that wasn't
+done silently).
