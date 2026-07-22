@@ -362,26 +362,32 @@ values fixes both — see §7 for why this is a pandas/UI choice, not a SQL one.
 Same top-level filters as Trends minus Planning Area/Floor/Size band (Year range, Type of sale,
 Tenure, Project name, Street), then tabs:
 
-- **Transaction Map & Ranking** — one Google Maps dot per geocoded transaction, colour = $psf,
-  plus green MRT/LRT exit markers (needs `GOOGLE_MAPS_API_KEY`, §1; geocoding via
-  `backend/geocode_buildings.py`, §8) — this map *is* the transaction-level detail view, so there's
-  no further drill-down. Below it, a **building ranking** table: avg/median $psf, transaction
-  count, and last trade date per building (`Project Name`), ≥3 transactions only (buildings with
-  fewer are too thin for a reliable average), sortable and downloadable.
-- **District Map & Ranking** — the 28-postal-district bubble map (bubble colour = avg $psf, size =
-  transaction count; position = mean of that district's real geocoded transactions, §8) with a
-  clickable avg-$psf ranking bar chart — selecting a district (bar click, or top-ranked by default)
-  runs the DuckDB drill-down (§5, Step E) to list and download that district's transactions.
-- **Planning Area Map & Ranking** — the same bubble map (`render_bubble_map`) grouped by planning
-  area instead of postal district, then avg $psf by URA planning area (≥10 transactions only, to
-  avoid unstable small-sample averages), clickable the same way as the district ranking: selecting
-  a bar (or the top-ranked area by default) runs a parameterized DuckDB query
-  (`WHERE sub_market = ?`) to list and download that area's transactions.
+Three of the four tabs share one layout, via two helpers (`ranking_bar_and_table`,
+`render_detail_table`): **Map** (full width) → **Ranking bar chart + summary table, side by side
+on one row** (the bar can cap itself to the top N rows for readability — the building ranking has
+100+ — but the table always lists every row) → **deep-dive detail table** below (every transaction
+in whichever group is clicked, or the top-ranked group by default), downloadable as CSV. This keeps
+Transaction/District/Planning-Area consistent at their three different zoom levels instead of each
+having its own bespoke layout.
+
+- **Transaction Map & Ranking** — Map: one Google Maps dot per geocoded transaction, colour =
+  $psf, plus green MRT/LRT exit markers (needs `GOOGLE_MAPS_API_KEY`, §1; geocoding via
+  `backend/geocode_buildings.py`, §8). Ranking: avg/median $psf by **building** (`Project Name`),
+  ≥3 transactions only (fewer is too thin for a reliable average) — bar shows the top 30, table
+  lists all. Deep-dive: every transaction in the clicked building.
+- **District Map & Ranking** — Map: the 28-postal-district bubble map (bubble colour = avg $psf,
+  size = transaction count; position = mean of that district's real geocoded transactions, §8).
+  Ranking: avg $psf by district. Deep-dive: that district's transactions (§5, Step E is this
+  DuckDB drill-down).
+- **Planning Area Map & Ranking** — Map: the same bubble map grouped by planning area instead of
+  postal district. Ranking: avg $psf by URA planning area, ≥10 transactions only (unstable
+  small-sample averages otherwise). Deep-dive: that area's transactions.
 - **Premium Factors** — four $psf comparisons, each its own chart: **Location** (Downtown Core vs.
   rest of market) and **Tenure** (Freehold vs. Leasehold) as KPI deltas + a grouped bar chart;
   **Floor tier** (Low/Mid/High, binned from `floor`); **Sale type** (New Sale / Resale / Sub Sale);
   and **MRT-accessibility** (median $psf by distance-to-nearest-MRT band, §9, for geocoded
-  transactions only).
+  transactions only). No map/ranking/deep-dive here — these are market-wide comparisons, not
+  drill-downs into one group.
 
 ### Summary ([backend/data_summary.py](backend/data_summary.py))
 
