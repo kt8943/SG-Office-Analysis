@@ -364,17 +364,22 @@ Tenure, Project name, Street), then tabs:
 
 Three of the four tabs share one layout, via two helpers (`ranking_bar_and_table`,
 `render_detail_table`): **Map** (full width) → **Ranking bar chart + summary table, side by side
-on one row** (the bar can cap itself to the top N rows for readability — the building ranking has
-100+ — but the table always lists every row) → **deep-dive detail table** below (every transaction
-in whichever group is clicked, or the top-ranked group by default), downloadable as CSV. This keeps
-Transaction/District/Planning-Area consistent at their three different zoom levels instead of each
-having its own bespoke layout.
+on one row, both showing every row** (no top-N cut on either side) → **deep-dive detail table**
+below (every transaction in whichever group is clicked, or the top-ranked group by default),
+downloadable as CSV. This keeps Transaction/District/Planning-Area consistent at their three
+different zoom levels instead of each having its own bespoke layout.
+
+Since a ranking can have 100+ rows (the building ranking does), the bar chart and the table are
+each fixed to the same `RANKING_VIEWPORT` height (440px) and scroll independently within it —
+`st.container(height=...)` for the chart (whose true height grows with the row count, so it has
+something to scroll), `st.dataframe`'s own `height` param for the table. Nothing is hidden; you
+scroll instead of losing rows past a cutoff.
 
 - **Transaction Map & Ranking** — Map: one Google Maps dot per geocoded transaction, colour =
   $psf, plus green MRT/LRT exit markers (needs `GOOGLE_MAPS_API_KEY`, §1; geocoding via
   `backend/geocode_buildings.py`, §8). Ranking: avg/median $psf by **building** (`Project Name`),
-  ≥3 transactions only (fewer is too thin for a reliable average) — bar shows the top 30, table
-  lists all. Deep-dive: every transaction in the clicked building.
+  ≥3 transactions only (fewer is too thin for a reliable average) — every qualifying building in
+  both the bar and the table. Deep-dive: every transaction in the clicked building.
 - **District Map & Ranking** — Map: the 28-postal-district bubble map (bubble colour = avg $psf,
   size = transaction count; position = mean of that district's real geocoded transactions, §8).
   Ranking: avg $psf by district. Deep-dive: that district's transactions (§5, Step E is this

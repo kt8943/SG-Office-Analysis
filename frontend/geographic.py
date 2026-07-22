@@ -148,34 +148,39 @@ def render_transaction_map(txf, mrt):
                f"yellow ${hi:,.0f}). Green dots are MRT/LRT station exits.")
 
 
-def ranking_bar_and_table(df, key_col, label_col, sel_key, top_n=None, extra_cols=None):
+RANKING_VIEWPORT = 440   # px — fixed visible height shared by the bar and the table
+RANKING_ROW_H = 26       # px per bar in the chart's true (scrollable) height
+
+
+def ranking_bar_and_table(df, key_col, label_col, sel_key, extra_cols=None):
     """Shared "Map & Ranking" layout piece: a click-to-select ranking bar chart beside
-    a summary table, on the same row. `df` (already sorted descending by avg_psf)
-    needs `key_col` (the grouping key used for selection + the caller's drill-down
-    query), `label_col` (display name — may equal key_col), `avg_psf`, `median_psf`,
-    `transactions`. The table always shows every row of `df`; `top_n` caps the BAR to
-    the top N (readability — a building ranking can have 100+ rows) without hiding any
-    row from the table. `extra_cols` adds pre-formatted columns to the table only
-    (e.g. a building's last trade date). Returns the selected `key_col` value: the
-    clicked bar, or the top-ranked row if nothing's been clicked yet."""
-    chart_df = df if top_n is None else df.head(top_n)
+    a summary table, on the same row, both showing EVERY row of `df` (no top-N cut) at
+    the same fixed viewport height — each scrolls independently if `df` doesn't fit,
+    via `st.container(height=...)` for the chart and `st.dataframe`'s own `height` for
+    the table. `df` (already sorted descending by avg_psf) needs `key_col` (the
+    grouping key used for selection + the caller's drill-down query), `label_col`
+    (display name — may equal key_col), `avg_psf`, `median_psf`, `transactions`.
+    `extra_cols` adds pre-formatted columns to the table only (e.g. a building's last
+    trade date). Returns the selected `key_col` value: the clicked bar, or the
+    top-ranked row if nothing's been clicked yet."""
     col_chart, col_table = st.columns([3, 2])
     with col_chart:
         pick = alt.selection_point(fields=[key_col], on="click", empty=False, name=f"pick_{sel_key}")
-        bar = alt.Chart(chart_df).mark_bar().encode(
+        bar = alt.Chart(df).mark_bar().encode(
             y=alt.Y(f"{label_col}:N", sort="-x", title=None),
             x=alt.X("avg_psf:Q", title="Avg $PSF"),
             color=alt.Color("avg_psf:Q", scale=alt.Scale(scheme="viridis"), legend=None),
             opacity=alt.condition(pick, alt.value(1.0), alt.value(0.45)),
             tooltip=[f"{label_col}:N", alt.Tooltip("avg_psf:Q", format=",.0f"),
                      alt.Tooltip("transactions:Q", format=",.0f")]
-        ).add_params(pick).properties(height=max(340, 24 * len(chart_df)))
-        event = st.altair_chart(bar, on_select="rerun", key=f"rank_{sel_key}", width="stretch")
+        ).add_params(pick).properties(height=max(RANKING_VIEWPORT, RANKING_ROW_H * len(df)))
+        with st.container(height=RANKING_VIEWPORT):
+            event = st.altair_chart(bar, on_select="rerun", key=f"rank_{sel_key}", width="stretch")
     with col_table:
         table_cols = [label_col, "avg_psf", "median_psf", "transactions"] + (extra_cols or [])
         st.dataframe(df[table_cols].style.format(
             {"avg_psf": "{:,.0f}", "median_psf": "{:,.0f}", "transactions": "{:,.0f}"}),
-            width="stretch", hide_index=True)
+            width="stretch", hide_index=True, height=RANKING_VIEWPORT)
 
     selected = None
     try:
@@ -268,15 +273,14 @@ with t1:
     n_bldg_all = len(bldg)
     bldg = bldg[bldg["transactions"] >= 3].sort_values("avg_psf", ascending=False)
     bldg["last_trade"] = bldg["last_trade"].dt.strftime("%Y-%m-%d")
-    st.markdown("**Building ranking** (top 30 shown; full list in the table) · click a bar to "
-               "see that building's transactions")
+    st.markdown("**Building ranking** · click a bar to see that building's transactions")
     st.caption(f"{len(bldg):,} of {n_bldg_all:,} buildings shown — fewer than 3 transactions "
                "excluded (too few for a reliable average).")
     if bldg.empty:
         st.info("No buildings with at least 3 transactions in the current filter.")
     else:
         sel_bldg = ranking_bar_and_table(bldg, "Project Name", "Project Name", "bldg",
-                                         top_n=30, extra_cols=["last_trade"])
+                                         extra_cols=["last_trade"])
         render_detail_table(txf, "Project Name", sel_bldg, title=sel_bldg,
                             download_stem=sel_bldg.replace(" ", "_"))
 
