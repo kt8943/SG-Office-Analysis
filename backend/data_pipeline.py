@@ -4,6 +4,7 @@ Cleans transactions + market/macro series and exposes a cached load_data().
 Also provides Singapore postal-district centroids/labels for the geographic page.
 """
 import glob
+import json
 import re
 from pathlib import Path
 
@@ -180,6 +181,44 @@ def load_employment_annual():
     return pmet
 
 
+def _load_mrt_exits():
+    """LTA MRT/LRT station exit points (Data/LTAMRTStationExit.geojson) — one row per
+    exit (613 exits, 190 stations), not one row per station: exits are the actual
+    pedestrian access points, so using them (not a single station centroid) gives a
+    more accurate nearest-MRT walking-distance proxy."""
+    with open(DATA / "LTAMRTStationExit.geojson") as f:
+        raw = json.load(f)
+    rows = []
+    for feat in raw["features"]:
+        lon, lat = feat["geometry"]["coordinates"][:2]
+        rows.append((feat["properties"]["STATION_NA"], lat, lon))
+    df = pd.DataFrame(rows, columns=["station", "lat", "lon"])
+    df["station"] = df["station"].str.replace(r"\s+(MRT|LRT) STATION$", "", regex=True).str.title()
+    return df
+
+
+@st.cache_data
+def load_mrt_stations():
+    """One point per station (mean of its exits) — for map markers, not distance calc
+    (see _load_mrt_exits/_nearest_mrt for the exit-level version used there)."""
+    return _load_mrt_exits().groupby("station", as_index=False)[["lat", "lon"]].mean()
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    lat1, lon1, lat2, lon2 = map(np.radians, (lat1, lon1, lat2, lon2))
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return 2 * r * np.arcsin(np.sqrt(a))
+
+
+def _nearest_mrt(lat, lon, exits):
+    """Nearest-exit distance (km) and that exit's station name, for each (lat, lon)."""
+    d = _haversine_km(lat.to_numpy()[:, None], lon.to_numpy()[:, None],
+                      exits["lat"].to_numpy()[None, :], exits["lon"].to_numpy()[None, :])
+    idx = d.argmin(axis=1)
+    return d[np.arange(len(d)), idx], exits["station"].to_numpy()[idx]
+
+
 @st.cache_data
 def load_data():
     tx = pd.read_csv(DATA / "CommercialTransaction_byProject.csv", thousands=",")
@@ -219,6 +258,25 @@ def load_data():
     tx["street"] = (tx["Address"].str.replace(
         r"^\s*\d+[A-Za-z]?(?:\s*,\s*\d+[A-Za-z]?)*\s*(?:\(ENBLOC\)\s*|ENBLOC\s*)?", "", regex=True)
                     .str.split("#").str[0].str.strip())
+
+    # Real per-transaction lat/lon, geocoded per BUILDING (not per transaction — units
+    # in the same building share one point, since that's the geocoding precision OneMap
+    # actually returns) by backend/geocode_buildings.py, cached to a CSV so the app never
+    # calls OneMap itself. "block_address" (block number + street, no #unit) is the join
+    # key both here and in that script; must stay in sync with it if either changes.
+    gb = pd.read_csv(DATA / "geocoded_buildings.csv")
+    tx["block_address"] = tx["Address"].str.split("#").str[0].str.strip()
+    tx = tx.merge(gb[["Project Name", "block_address", "lat", "lon"]],
+                 on=["Project Name", "block_address"], how="left")
+    tx = tx.drop(columns="block_address")
+
+    exits = _load_mrt_exits()
+    geo = tx["lat"].notna()
+    dist, station = _nearest_mrt(tx.loc[geo, "lat"], tx.loc[geo, "lon"], exits)
+    tx["dist_to_mrt_km"] = np.nan
+    tx["nearest_mrt"] = None
+    tx.loc[geo, "dist_to_mrt_km"] = dist
+    tx.loc[geo, "nearest_mrt"] = station
 
     market = _load_market("Property Price Index of Office Space.csv",
                           "Property Price Index of Office Space in Central Region (INDEX)", "price_index")
