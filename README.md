@@ -83,7 +83,7 @@ table — §3.3b) key. Loader column: which function in `backend/data_pipeline.p
 | `Number of Employed Residents by Occupation.csv` | *employed*, summed over PMET occupations | `pmet_employment` | annual | `load_employment_annual` (loaded, **not yet wired into any chart**) |
 | `geocoded_buildings.csv`² | *lat*, *lon* | `lat`, `lon` (per transaction, joined by building) | static (geocoded once) | inline in `load_data` |
 | `LTAMRTStationExit.geojson` (LTA) | *STATION_NA*, geometry | `dist_to_mrt_km`, `nearest_mrt` (per transaction); `load_mrt_stations()` for map markers | static | `_load_mrt_exits`, `_nearest_mrt` |
-| `Train Station Codes and Chinese Names.xls` (LTA) | *stn_code*, *mrt_station_english*, *mrt_line_english* | `n_lines`/`is_interchange` (per station); `mrt_count_400m`/`near_interchange_400m` (per transaction) | static | `_load_mrt_lines` |
+| `Train Station Codes and Chinese Names.xls` (LTA) | *stn_code*, *mrt_station_english*, *mrt_line_english* | `n_lines`/`is_interchange` (per station); `mrt_count_400m`/`max_lines_400m` (per transaction) | static | `_load_mrt_lines` |
 
 ¹ filename contains a zero-width space between "Employ" and "ment" in the raw export; located via
 `glob.glob(...)` rather than a literal path — see `_load_construction_materials`'s neighbour in
@@ -251,7 +251,7 @@ Derived in `load_data`:
 | `real_psf` | `psf × 100 / cpi` — CPI-deflated $PSF (2024 base), via a quarter join to `cpi` |
 | `lat`, `lon` | joined from `geocoded_buildings.csv` by (`Project Name`, block+street address) — 100% coverage (building-level + street-level fallback, §8) |
 | `dist_to_mrt_km`, `nearest_mrt` | haversine distance/name of the nearest of 613 MRT/LRT exit points (`LTAMRTStationExit.geojson`) — `NaN` wherever `lat`/`lon` is blank |
-| `mrt_count_400m`, `near_interchange_400m` | station-level (not exit-level) haversine: count of distinct stations, and whether any is an interchange, within 400m (`load_mrt_stations()`, §8) |
+| `mrt_count_400m`, `max_lines_400m` | station-level (not exit-level) haversine, within 400m: count of distinct stations, and the highest line-count among them (0 if none) (`load_mrt_stations()`, §8) |
 
 ---
 
@@ -396,13 +396,13 @@ scroll instead of losing rows past a cutoff.
   / Sub Sale); **Unit-size** (`size_band`) and **Deal-size** (`deal_band`, transaction price
   bucketed <$5M/$5–10M/>$10M — both confirm a real, roughly monotonic premium in the current data,
   bigger units/deals pricier per sqft); **MRT density** (`mrt_count_400m` — distinct stations
-  within a 5-min/400m walk, §8 — also a clean, roughly monotonic premium: $1,708 median at 0
-  stations up to $2,526 at 3) and **Interchange access** (`near_interchange_400m` — is an
-  interchange station within 400m, §8 — a much weaker premium, +1.3%, since the effect is largely
-  already captured by MRT density and CBD location; kept in the UI as an honest negative-ish
-  result, not dressed up); and, full-width, **MRT-accessibility** (median $psf by
-  distance-to-nearest-MRT band, §9, for geocoded transactions only). No map/ranking/deep-dive here
-  — these are market-wide comparisons, not drill-downs into one group.
+  within a 5-min/400m walk, §8 — a clean, roughly monotonic premium: $1,708 median at 0 stations
+  up to $2,526 at 3) and **Interchange access** (`max_lines_400m` — the highest line-count among
+  stations within 400m, 0 if none, §8 — 3-line interchanges stand out ($2,447 median) but 1- vs
+  2-line isn't a clean step, since most of that signal is already captured by MRT density itself);
+  and, full-width, **MRT-accessibility** (median $psf by distance-to-nearest-MRT band, §9, for
+  geocoded transactions only). No map/ranking/deep-dive here — these are market-wide comparisons,
+  not drill-downs into one group.
 
 ### Summary ([backend/data_summary.py](backend/data_summary.py))
 
@@ -481,7 +481,7 @@ grew to millions of rows or moved to a real database backend instead of an in-me
   street-network walking distance — a reasonable proxy for a descriptive dashboard, but will
   understate distance where a river/expressway/building blocks the direct line.
 - **400m interchange/density radius, and how interchanges are identified:** `mrt_count_400m` and
-  `near_interchange_400m` use 400m (~5-min walk) — Singapore's own URA/HDB planning parameters'
+  `max_lines_400m` use 400m (~5-min walk) — Singapore's own URA/HDB planning parameters'
   standard "walking distance to transit" threshold, and what local MRT-premium research/marketing
   ("5 minutes from X MRT") means by "near a station." Interchange status (≥2 lines) comes from
   LTA's own station-code list (`Data/Train Station Codes and Chinese Names.xls`, one row per
@@ -579,7 +579,7 @@ chart) since there's no genuine monthly release for it.
 | Premium Factors — Unit-size | `psf` split by `size_band` | `Unit Price ($ PSF)`, `size_band` (bins of `Area (SQFT)`, §4) |
 | Premium Factors — Deal-size | `psf` split by `deal_band` | `Unit Price ($ PSF)`, `deal_band` (bins of `Transacted Price ($)`, §4) |
 | Premium Factors — MRT density (400m) | `psf` split by `mrt_count_400m` | `mrt_count_400m` = count of distinct stations within 400m, from `load_mrt_stations()` (§8) |
-| Premium Factors — Interchange access (400m) | `psf` split by `near_interchange_400m` | `near_interchange_400m` = any `is_interchange` station within 400m; `is_interchange` from `Train Station Codes and Chinese Names.xls` (LTA), §8 |
+| Premium Factors — Interchange access (400m) | `psf` split by `max_lines_400m` | `max_lines_400m` = highest `n_lines` among stations within 400m (0 if none); `n_lines` from `Train Station Codes and Chinese Names.xls` (LTA), §8 |
 | Premium Factors — MRT-accessibility | `dist_to_mrt_km` (binned), `psf` | `dist_to_mrt_km` = haversine distance from `lat`/`lon` to the nearest MRT/LRT exit (`_nearest_mrt` in `data_pipeline.py`) |
 
 `pmet_employment` (`load_employment_annual()`, ← `Number of Employed Residents by Occupation.csv`)

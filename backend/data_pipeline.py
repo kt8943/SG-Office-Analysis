@@ -349,9 +349,13 @@ def load_data():
     within_400m = _haversine_km(tx.loc[geo, "lat"].to_numpy()[:, None], tx.loc[geo, "lon"].to_numpy()[:, None],
                                 stations["lat"].to_numpy()[None, :], stations["lon"].to_numpy()[None, :]) <= 0.4
     tx["mrt_count_400m"] = 0
-    tx["near_interchange_400m"] = False
+    tx["max_lines_400m"] = 0
     tx.loc[geo, "mrt_count_400m"] = within_400m.sum(axis=1)
-    tx.loc[geo, "near_interchange_400m"] = (within_400m & stations["is_interchange"].to_numpy()[None, :]).any(axis=1)
+    # best (highest-line-count) station reachable within 400m, not just "is any of
+    # them an interchange" — lets 3-line vs 2-line vs 1-line vs none each show its
+    # own median $psf, rather than collapsing 2- and 3-line interchanges together.
+    station_lines = stations["n_lines"].fillna(1).to_numpy()
+    tx.loc[geo, "max_lines_400m"] = np.where(within_400m, station_lines[None, :], 0).max(axis=1)
 
     market = _load_market("Property Price Index of Office Space.csv",
                           "Property Price Index of Office Space in Central Region (INDEX)", "price_index")

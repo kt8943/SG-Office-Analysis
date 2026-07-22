@@ -410,11 +410,11 @@ with t4:
         if inter_txf.empty:
             st.info("No geocoded transactions in the current filter.")
         else:
-            st.caption("Whether an interchange station (≥2 MRT/LRT lines, verified against "
-                       "LTA's official station-line list, §8) is within 400m — weaker than "
-                       "MRT density: the interchange effect is largely already captured by "
-                       "station density and CBD location, so this adds little on its own.")
-            premium_bar_chart(inter_txf, "near_interchange_400m", [False, True], RED)
+            st.caption("Best station reachable within 400m, by line count (verified against "
+                       "LTA's official station-line list, §8) — 0 = no station within 400m. "
+                       "3-line interchanges stand out, but 1- vs 2-line isn't a clean step: "
+                       "most of the effect is already captured by station density (left).")
+            premium_bar_chart(inter_txf, "max_lines_400m", [0, 1, 2, 3], RED)
 
     st.divider()
     st.markdown("**MRT-accessibility premium**")
