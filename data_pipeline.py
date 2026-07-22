@@ -143,6 +143,18 @@ def load_data():
     return tx, market.sort_values("quarter")
 
 
+def market_monthly(market):
+    """Expand the quarterly market table to monthly by forward-fill: each quarter's
+    value is repeated across its 3 calendar months (a step function), since every
+    market/macro series in `market` is quarterly-sourced — there is no genuine monthly
+    observation to show. Callers must not present this as a true monthly reading."""
+    m = market.dropna(subset=["quarter"]).copy()
+    m["month"] = m["quarter"].dt.to_timestamp(how="start").dt.to_period("M")
+    frames = [m.assign(month=m["month"] + i) for i in range(3)]
+    out = pd.concat(frames, ignore_index=True).drop(columns="quarter")
+    return out.sort_values("month").reset_index(drop=True)
+
+
 def type_filter(tx):
     """Sidebar 'Transaction Type' selector shared by every page (persists across page
     switches via the shared session-state key). Strata = individual unit sales, the norm

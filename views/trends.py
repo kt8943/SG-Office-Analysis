@@ -3,7 +3,7 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
-from data_pipeline import load_data, type_filter
+from data_pipeline import load_data, type_filter, market_monthly
 
 alt.data_transformers.disable_max_rows()
 BLUE, RED = "#2E7DF7", "#E4572E"
@@ -22,13 +22,25 @@ FMT = {"volume": "{:,.0f}", "total_area": "{:,.0f}", "total_value": "{:,.0f}",
 
 
 def aggregate(tx, market, gran):
-    key = "quarter" if gran == "Quarter" else "year"
+    if gran == "Month":
+        tx = tx.assign(month=tx["sale_date"].dt.to_period("M"))
+        key = "month"
+    elif gran == "Quarter":
+        key = "quarter"
+    else:
+        key = "year"
     agg = (tx.groupby(key).agg(
         volume=("psf", "size"), total_area=("area_sqft", "sum"),
         avg_price=("price", "mean"), median_price=("price", "median"),
         median_psf=("psf", "median"), mean_psf=("psf", "mean"),
         median_real_psf=("real_psf", "median"), total_value=("price", "sum")).reset_index())
-    if gran == "Quarter":
+    if gran == "Month":
+        # market is quarterly-sourced — expand via forward-fill (step function), not a
+        # genuine monthly observation. See market_monthly().
+        agg = agg.merge(market_monthly(market), on="month", how="left")
+        agg["period_date"] = agg["month"].dt.to_timestamp()
+        agg["period"] = agg["month"].astype(str)
+    elif gran == "Quarter":
         agg = agg.merge(market, on="quarter", how="left")
         agg["period_date"] = agg["quarter"].dt.to_timestamp()
         agg["period"] = agg["quarter"].astype(str)
@@ -90,12 +102,22 @@ def dual_line_chart(agg, series, y_title, events=False):
 
 
 def breakdown(txf, gran, tx_col, func, out_col):
-    key = "quarter" if gran == "Quarter" else "year"
+    if gran == "Month":
+        txf = txf.assign(month=txf["sale_date"].dt.to_period("M"))
+        key = "month"
+    elif gran == "Quarter":
+        key = "quarter"
+    else:
+        key = "year"
     top = txf["sub_market"].value_counts().head(6).index
     d = (txf[txf["sub_market"].isin(top)].groupby([key, "sub_market"])[tx_col]
          .agg(func).reset_index().rename(columns={tx_col: out_col}))
-    d["period_date"] = (d["quarter"].dt.to_timestamp() if gran == "Quarter"
-                        else pd.to_datetime(d["year"].astype(str) + "-01-01"))
+    if gran == "Month":
+        d["period_date"] = d["month"].dt.to_timestamp()
+    elif gran == "Quarter":
+        d["period_date"] = d["quarter"].dt.to_timestamp()
+    else:
+        d["period_date"] = pd.to_datetime(d["year"].astype(str) + "-01-01")
     return d
 
 
@@ -153,7 +175,7 @@ r3 = st.columns(2)
 name_sel = r3[0].multiselect("Project name (empty = all)", projects_all)
 street_sel = r3[1].multiselect("Street (empty = all)", streets_all)
 
-gran = st.radio("Granularity", ["Year", "Quarter"], horizontal=True)
+gran = st.radio("Granularity", ["Year", "Quarter", "Month"], horizontal=True)
 brk = st.checkbox("Break down by Planning Area (top 6)")
 
 pick = lambda sel, allv: allv if not sel else sel
@@ -170,6 +192,13 @@ if txf.empty:
     st.warning("No transactions match the current filters. Widen the selection above.")
     st.stop()
 agg = aggregate(txf, market, gran)
+if gran == "Month":
+    thin = int((agg["volume"] < 5).sum())
+    if thin:
+        st.warning(f"Monthly view: {thin} of {len(agg):,} months have fewer than 5 "
+                   "transactions in the current filter — their $PSF figures can swing "
+                   "sharply on just one or two deals. Widen the filter or switch to "
+                   "Quarter/Year for a steadier read.", icon="⚠️")
 
 # KPI cards summarise the ENTIRE filtered selection (every filter above, incl. year
 # range), so they always match the transaction count in the caption — no silent
@@ -261,6 +290,10 @@ with t4:
 
 with t5:
     st.markdown("### Macro-Economic Indicators vs Office Market")
+    if gran == "Month":
+        st.caption("All macro/market series here are quarterly-sourced. At Month "
+                   "granularity each quarter's value is repeated across its 3 months "
+                   "(a step function) — it is not a genuine monthly observation.")
     subtabs = st.tabs(list(MACRO_TABS))
     for st_tab, (name, (col, label)) in zip(subtabs, MACRO_TABS.items()):
         with st_tab:
