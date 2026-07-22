@@ -290,6 +290,18 @@ def market_monthly(market):
     return out.sort_values("month").reset_index(drop=True)
 
 
+def downsample_market_monthly(mm, to):
+    """Aggregate the natively-monthly table (load_market_monthly()) DOWN to quarter or
+    year via mean — the safe direction (fine -> coarse never needs an assumption,
+    unlike market_monthly()'s forward-fill). `to` is 'quarter' or 'year'."""
+    m = mm.copy()
+    if to == "quarter":
+        m["quarter"] = m["month"].dt.asfreq("Q")
+    else:
+        m["year"] = m["month"].dt.year
+    return m.drop(columns="month").groupby(to).mean(numeric_only=True).reset_index()
+
+
 def type_filter(tx):
     """Sidebar 'Transaction Type' selector shared by every page (persists across page
     switches via the shared session-state key). Strata = individual unit sales, the norm

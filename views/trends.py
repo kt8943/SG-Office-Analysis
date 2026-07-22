@@ -3,22 +3,52 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
-from data_pipeline import load_data, type_filter, market_monthly
+from data_pipeline import (load_data, type_filter, market_monthly,
+                          load_market_monthly, downsample_market_monthly)
 
 alt.data_transformers.disable_max_rows()
 BLUE, RED = "#2E7DF7", "#E4572E"
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 EVENTS = {2020: "COVID", 2022: "Rate-Hike Surge"}
-MACRO_TABS = {"PSF vs CPI": ("cpi", "CPI (index, 2024=100)"),
-              "PSF vs Interest Rate": ("sora_3m", "SORA 3M (%)"),
-              "PSF vs GDP": ("gdp_growth", "GDP growth (YoY %)"),
-              "PSF vs Rent Index": ("rent_index", "URA Office Rent Index"),
-              "PSF vs Office Price Index": ("price_index", "URA Office Price Index")}
+# Grouped into themes so the tab bar never shows more than 5 at once. label -> (column,
+# axis title). Columns in NATIVE_MONTHLY_COLS come from a genuinely monthly source
+# (load_market_monthly()); every other column here is quarterly- or annual-sourced and
+# only reaches Month granularity via forward-fill (market_monthly()).
+MACRO_GROUPS = {
+    "Rates & Inflation": {
+        "PSF vs CPI": ("cpi", "CPI (index, 2024=100)"),
+        "PSF vs Interest Rate (SORA 3M)": ("sora_3m", "SORA 3M (%)"),
+        "PSF vs 10Y Bond Yield": ("sgs_10y_yield", "SGS 10Y Bond Yield (%)"),
+        "PSF vs GDP": ("gdp_growth", "GDP growth (YoY %, real)"),
+    },
+    "Office Market Indices": {
+        "PSF vs Rent Index": ("rent_index", "URA Office Rent Index"),
+        "PSF vs Office Price Index": ("price_index", "URA Office Price Index"),
+        "PSF vs Vacancy Rate": ("vacancy_rate", "Office Vacancy Rate (%)"),
+        "PSF vs Supply Pipeline": ("supply_pipeline", "Supply Pipeline ('000 sqm)"),
+    },
+    "Employment & FX": {
+        "PSF vs Office-Using Employment Change": ("office_employment_chg", "Employment chg ('000, qtr)"),
+        "PSF vs SGD/USD Exchange Rate": ("sgd_usd_fx", "SGD per USD"),
+    },
+    "Construction Costs": {
+        "PSF vs Cement Price": ("price_cement", "Cement Price (bulk, $/tonne)"),
+        "PSF vs Steel Rebar Price": ("price_steel_rebar", "Steel Rebar Price ($/tonne)"),
+        "PSF vs Granite Price": ("price_granite", "Granite Aggregate Price ($/tonne)"),
+        "PSF vs Sand Price": ("price_sand", "Concreting Sand Price ($/tonne)"),
+        "PSF vs Ready-Mix Concrete Price": ("price_concrete", "Ready-Mix Concrete Price ($/m³)"),
+    },
+}
+NATIVE_MONTHLY_COLS = {"cpi", "sora_3m", "sgs_10y_yield", "sgd_usd_fx", "price_cement",
+                       "price_steel_rebar", "price_granite", "price_sand", "price_concrete"}
 FMT = {"volume": "{:,.0f}", "total_area": "{:,.0f}", "total_value": "{:,.0f}",
        "avg_price": "{:,.0f}", "median_price": "{:,.0f}", "median_psf": "{:,.0f}", "mean_psf": "{:,.0f}",
        "median_real_psf": "{:,.0f}", "price_index": "{:.1f}", "rent_index": "{:.1f}",
        "vacancy_rate": "{:.1f}", "supply_pipeline": "{:.0f}", "gdp_growth": "{:.1f}",
-       "cpi": "{:.1f}", "sora_3m": "{:.2f}", "unemployment": "{:.1f}"}
+       "cpi": "{:.1f}", "sora_3m": "{:.2f}", "unemployment": "{:.1f}",
+       "sgs_10y_yield": "{:.2f}", "sgd_usd_fx": "{:.4f}", "office_employment_chg": "{:+.1f}",
+       "price_cement": "{:.1f}", "price_steel_rebar": "{:.0f}", "price_granite": "{:.1f}",
+       "price_sand": "{:.1f}", "price_concrete": "{:.1f}"}
 
 
 def aggregate(tx, market, gran):
@@ -34,20 +64,34 @@ def aggregate(tx, market, gran):
         avg_price=("price", "mean"), median_price=("price", "median"),
         median_psf=("psf", "median"), mean_psf=("psf", "mean"),
         median_real_psf=("real_psf", "median"), total_value=("price", "sum")).reset_index())
+
+    # `market` (from load_data()) is quarterly-sourced throughout, incl. its own cpi/
+    # sora_3m columns. `mm` (load_market_monthly()) is genuinely monthly for cpi/sora_3m/
+    # sgs_10y_yield/sgd_usd_fx/construction-material prices — drop market's versions of
+    # cpi/sora_3m before merging mm in, so the real monthly (or mean-downsampled)
+    # observation wins instead of a forward-filled/duplicate one.
+    mm = load_market_monthly()
     if gran == "Month":
-        # market is quarterly-sourced — expand via forward-fill (step function), not a
-        # genuine monthly observation. See market_monthly().
-        agg = agg.merge(market_monthly(market), on="month", how="left")
+        # mm has genuine monthly cpi/sora_3m — drop market's forward-filled versions so
+        # mm's real observation wins instead of colliding under the same column name.
+        mkt_ff = market_monthly(market).drop(columns=["cpi", "sora_3m"], errors="ignore")
+        agg = agg.merge(mkt_ff, on="month", how="left").merge(mm, on="month", how="left")
         agg["period_date"] = agg["month"].dt.to_timestamp()
         agg["period"] = agg["month"].astype(str)
     elif gran == "Quarter":
-        agg = agg.merge(market, on="quarter", how="left")
+        # cpi/sora_3m: keep market's own quarterly-native release (unchanged from before
+        # this feature). Drop mm's downsampled versions of just those two columns so
+        # the merge below doesn't collide with them; mm's other columns (sgs_10y_yield/
+        # sgd_usd_fx/materials) have no equivalent in market and merge in cleanly.
+        mm_q = downsample_market_monthly(mm, "quarter").drop(columns=["cpi", "sora_3m"], errors="ignore")
+        agg = agg.merge(market, on="quarter", how="left").merge(mm_q, on="quarter", how="left")
         agg["period_date"] = agg["quarter"].dt.to_timestamp()
         agg["period"] = agg["quarter"].astype(str)
     else:
         my = market.copy(); my["year"] = my["quarter"].dt.year
         my = my.drop(columns="quarter").groupby("year").mean(numeric_only=True).reset_index()
-        agg = agg.merge(my, on="year", how="left")
+        mm_y = downsample_market_monthly(mm, "year").drop(columns=["cpi", "sora_3m"], errors="ignore")
+        agg = agg.merge(my, on="year", how="left").merge(mm_y, on="year", how="left")
         agg["period_date"] = pd.to_datetime(agg["year"].astype(str) + "-01-01")
         agg["period"] = agg["year"].astype(str)
     return agg.sort_values("period_date")
@@ -290,27 +334,40 @@ with t4:
 
 with t5:
     st.markdown("### Macro-Economic Indicators vs Office Market")
-    if gran == "Month":
-        st.caption("All macro/market series here are quarterly-sourced. At Month "
-                   "granularity each quarter's value is repeated across its 3 months "
-                   "(a step function) — it is not a genuine monthly observation.")
-    subtabs = st.tabs(list(MACRO_TABS))
-    for st_tab, (name, (col, label)) in zip(subtabs, MACRO_TABS.items()):
-        with st_tab:
-            corr = agg[["median_psf", col]].corr().iloc[0, 1]
-            st.markdown(f"**Median $PSF vs {label}**  ·  correlation **{corr:+.2f}**")
-            base = alt.Chart(agg).encode(x=alt.X("period_date:T", title=None))
-            lp = base.mark_line(point=True, color=BLUE).encode(
-                y=alt.Y("median_psf:Q", title="Median $PSF",
-                        axis=alt.Axis(titleColor=BLUE), scale=alt.Scale(zero=False)))
-            lm = base.mark_line(point=True, color=RED, strokeDash=[4, 3]).encode(
-                y=alt.Y(f"{col}:Q", title=label, axis=alt.Axis(titleColor=RED), scale=alt.Scale(zero=False)))
-            st.altair_chart(alt.layer(lp, lm).resolve_scale(y="independent").properties(height=380),
-                            width="stretch")
-            with st.expander("AI Insight"):
-                direction = ("moves with" if corr > 0.2 else "moves against" if corr < -0.2
-                             else "shows little linear link to")
-                st.markdown(f"Over {agg['period'].iloc[0]}–{agg['period'].iloc[-1]}, median $PSF "
-                            f"**{direction}** {label} (correlation {corr:+.2f}). "
-                            "Correlation is not causation; lead/lag effects need the modeling phase.")
-            render_table(agg, ["period", "median_psf", col], f"macro_{col}")
+    group_tabs = st.tabs(list(MACRO_GROUPS))
+    for grp_tab, (grp_name, factors) in zip(group_tabs, MACRO_GROUPS.items()):
+        with grp_tab:
+            subtabs = st.tabs(list(factors))
+            for st_tab, (name, (col, label)) in zip(subtabs, factors.items()):
+                with st_tab:
+                    s = agg.dropna(subset=[col])
+                    if len(s) < 2:
+                        st.info(f"No {label} data over the currently selected period/filters.")
+                        continue
+                    if gran == "Month":
+                        if col in NATIVE_MONTHLY_COLS:
+                            st.caption(f"{label} is a genuine monthly observation (not "
+                                       "forward-filled).")
+                        else:
+                            st.caption(f"{label} is sourced quarterly — at Month "
+                                       "granularity each quarter's value is repeated "
+                                       "across its 3 months (a step function), not a "
+                                       "genuine monthly observation.")
+                    corr = agg[["median_psf", col]].corr().iloc[0, 1]
+                    st.markdown(f"**Median $PSF vs {label}**  ·  correlation **{corr:+.2f}**")
+                    base = alt.Chart(agg).encode(x=alt.X("period_date:T", title=None))
+                    lp = base.mark_line(point=True, color=BLUE).encode(
+                        y=alt.Y("median_psf:Q", title="Median $PSF",
+                                axis=alt.Axis(titleColor=BLUE), scale=alt.Scale(zero=False)))
+                    lm = base.mark_line(point=True, color=RED, strokeDash=[4, 3]).encode(
+                        y=alt.Y(f"{col}:Q", title=label, axis=alt.Axis(titleColor=RED),
+                               scale=alt.Scale(zero=False)))
+                    st.altair_chart(alt.layer(lp, lm).resolve_scale(y="independent").properties(height=380),
+                                    width="stretch")
+                    with st.expander("AI Insight"):
+                        direction = ("moves with" if corr > 0.2 else "moves against" if corr < -0.2
+                                     else "shows little linear link to")
+                        st.markdown(f"Over {s['period'].iloc[0]}–{s['period'].iloc[-1]}, median $PSF "
+                                    f"**{direction}** {label} (correlation {corr:+.2f}). "
+                                    "Correlation is not causation; lead/lag effects need the modeling phase.")
+                    render_table(agg, ["period", "median_psf", col], f"macro_{col}")
