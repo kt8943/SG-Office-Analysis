@@ -13,8 +13,6 @@ import streamlit.components.v1 as components
 from backend.data_pipeline import (load_data, type_filter, load_mrt_stations,
                                    DISTRICT_CENTROIDS, DISTRICT_LABELS)
 
-BLUE = "#2E7DF7"
-
 GMAP_TEMPLATE = """
 <div id="map" style="height:500px;width:100%;border-radius:8px;"></div>
 <script>
@@ -228,9 +226,11 @@ def premium_bar_chart(txf, group_col, sort_order, x_title=None, height=300):
     by = (txf.groupby(group_col, observed=True)
           .agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
                transactions=("psf", "size")).reset_index())
-    st.altair_chart(alt.Chart(by).mark_bar(color=BLUE).encode(
-        x=alt.X(f"{group_col}:N", title=x_title, sort=sort_order),
+    st.altair_chart(alt.Chart(by).mark_bar().encode(
+        x=alt.X(f"{group_col}:O", title=x_title, sort=sort_order),
         y=alt.Y("avg_psf:Q", title="Average $PSF", scale=alt.Scale(zero=False)),
+        color=alt.Color(f"{group_col}:O", sort=sort_order, title=None,
+                        scale=alt.Scale(scheme="blues"), legend=None),
         tooltip=[f"{group_col}:N", alt.Tooltip("avg_psf:Q", title="Average $psf", format=",.0f"),
                  alt.Tooltip("median_psf:Q", title="Median $psf", format=",.0f"),
                  alt.Tooltip("transactions:Q", format=",.0f")]
