@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 from backend.data_pipeline import (load_data, type_filter, load_mrt_stations,
                                    DISTRICT_CENTROIDS, DISTRICT_LABELS)
 
-BLUE, RED = "#2E7DF7", "#E4572E"
+BLUE = "#2E7DF7"
 
 GMAP_TEMPLATE = """
 <div id="map" style="height:500px;width:100%;border-radius:8px;"></div>
@@ -221,22 +221,18 @@ def render_detail_table(txf, where_col, where_val, title, download_stem):
 
 
 def premium_bar_chart(txf, group_col, sort_order, x_title=None, height=300):
-    """One Premium Factors comparison: Average and Median $psf by category
-    (`group_col`, already a column on `txf`), as paired bars — same Average=blue/
-    Median=red convention as the Trends page's dual_line_chart, so the two pages
-    read consistently. Sample size is in the tooltip."""
+    """One Premium Factors comparison: Average $psf by category (`group_col`,
+    already a column on `txf`). Median tracks the same trend as Average across
+    every comparison on this page, so it's muted from the chart and kept only
+    in the tooltip to avoid clutter."""
     by = (txf.groupby(group_col, observed=True)
           .agg(avg_psf=("psf", "mean"), median_psf=("psf", "median"),
                transactions=("psf", "size")).reset_index())
-    long = by.melt(id_vars=[group_col, "transactions"], value_vars=["avg_psf", "median_psf"],
-                   var_name="metric", value_name="psf_value")
-    long["metric"] = long["metric"].map({"avg_psf": "Average", "median_psf": "Median"})
-    st.altair_chart(alt.Chart(long).mark_bar().encode(
+    st.altair_chart(alt.Chart(by).mark_bar(color=BLUE).encode(
         x=alt.X(f"{group_col}:N", title=x_title, sort=sort_order),
-        xOffset=alt.XOffset("metric:N", sort=["Average", "Median"]),
-        y=alt.Y("psf_value:Q", title="$PSF", scale=alt.Scale(zero=False)),
-        color=alt.Color("metric:N", title=None, scale=alt.Scale(domain=["Average", "Median"], range=[BLUE, RED])),
-        tooltip=[f"{group_col}:N", "metric:N", alt.Tooltip("psf_value:Q", format=",.0f"),
+        y=alt.Y("avg_psf:Q", title="Average $PSF", scale=alt.Scale(zero=False)),
+        tooltip=[f"{group_col}:N", alt.Tooltip("avg_psf:Q", title="Average $psf", format=",.0f"),
+                 alt.Tooltip("median_psf:Q", title="Median $psf", format=",.0f"),
                  alt.Tooltip("transactions:Q", format=",.0f")]
     ).properties(height=height), width="stretch")
 

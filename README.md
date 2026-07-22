@@ -390,9 +390,9 @@ scroll instead of losing rows past a cutoff.
   postal district. Ranking: avg $psf by URA planning area, ≥10 transactions only (unstable
   small-sample averages otherwise). Deep-dive: that area's transactions.
 - **Premium Factors** — eight $psf comparisons (each its own chart, `premium_bar_chart`), every
-  chart showing **both Average and Median** as paired bars (same Average=blue/Median=red
-  convention as Trends' `dual_line_chart`, for consistency across pages), laid out two per row
-  except the last (more categories, needs the width): **Location** (Downtown Core vs.
+  chart showing **Average $psf** (Median tracks the same trend on every comparison here, so it's
+  muted from the bars and kept in the tooltip only), laid out two per row except the last (more
+  categories, needs the width): **Location** (Downtown Core vs.
   rest of market, with KPI-delta metrics) and **Tenure** (Freehold vs. Leasehold, with KPI-delta
   metrics); **Floor tier** (Low/Mid/High, binned from `floor`) and **Sale type** (New Sale / Resale
   / Sub Sale); **Unit-size** (`size_band`) and **Deal-size** (`deal_band`, transaction price
