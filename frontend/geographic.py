@@ -220,6 +220,19 @@ def render_detail_table(txf, where_col, where_val, title, download_stem):
                        key=f"dl_{download_stem}")
 
 
+def premium_bar_chart(txf, group_col, sort_order, color, x_title=None, height=300):
+    """One Premium Factors comparison: median $psf by category (`group_col`, already
+    a column on `txf`), with sample size in the tooltip."""
+    by = (txf.groupby(group_col, observed=True)
+          .agg(median_psf=("psf", "median"), transactions=("psf", "size")).reset_index())
+    st.altair_chart(alt.Chart(by).mark_bar(color=color).encode(
+        x=alt.X(f"{group_col}:N", title=x_title, sort=sort_order),
+        y=alt.Y("median_psf:Q", title="Median $PSF", scale=alt.Scale(zero=False)),
+        tooltip=[f"{group_col}:N", alt.Tooltip("median_psf:Q", format=",.0f"),
+                 alt.Tooltip("transactions:Q", format=",.0f")]
+    ).properties(height=height), width="stretch")
+
+
 st.title("Geospatial Analysis")
 st.caption("How location affects office pricing — transaction, district, and planning-area "
            "maps & rankings, plus location/tenure/floor/MRT price premiums.")
@@ -335,54 +348,50 @@ with t3:
 
 # ---------------------------------------------------------------- premium factors
 with t4:
-    st.markdown("**Location premium** — Downtown Core vs. rest of market")
-    cbd = txf[txf["sub_market"] == "Downtown Core"]["psf"].median()
-    rest = txf[txf["sub_market"] != "Downtown Core"]["psf"].median()
-    fh = txf[txf["tenure_type"] == "Freehold"]["psf"].median()
-    lh = txf[txf["tenure_type"] == "Leasehold"]["psf"].median()
-    m = st.columns(4)
-    m[0].metric("Downtown Core median $PSF", f"{cbd:,.0f}")
-    m[1].metric("Rest of market median $PSF", f"{rest:,.0f}",
-                f"{(cbd/rest-1)*100:+.0f}% CBD premium" if rest else None)
-    m[2].metric("Freehold median $PSF", f"{fh:,.0f}")
-    m[3].metric("Leasehold median $PSF", f"{lh:,.0f}",
-                f"{(fh/lh-1)*100:+.0f}% freehold premium" if lh else None)
-
-    comp = pd.DataFrame({
-        "group": ["Downtown Core", "Rest of market", "Freehold", "Leasehold"],
-        "median_psf": [cbd, rest, fh, lh],
-        "kind": ["Location", "Location", "Tenure", "Tenure"]})
-    st.altair_chart(alt.Chart(comp).mark_bar().encode(
-        x=alt.X("group:N", title=None, sort=None),
-        y=alt.Y("median_psf:Q", title="Median $PSF"),
-        color=alt.Color("kind:N", scale=alt.Scale(range=[BLUE, RED]), title=None),
-        tooltip=["group:N", alt.Tooltip("median_psf:Q", format=",.0f")]
-    ).properties(height=340), width="stretch")
+    row1a, row1b = st.columns(2)
+    with row1a:
+        st.markdown("**Location premium** — Downtown Core vs. rest of market")
+        cbd = txf[txf["sub_market"] == "Downtown Core"]["psf"].median()
+        rest = txf[txf["sub_market"] != "Downtown Core"]["psf"].median()
+        mc = st.columns(2)
+        mc[0].metric("Downtown Core median $PSF", f"{cbd:,.0f}")
+        mc[1].metric("Rest of market median $PSF", f"{rest:,.0f}",
+                     f"{(cbd/rest-1)*100:+.0f}% CBD premium" if rest else None)
+        loc_txf = txf.assign(location=np.where(txf["sub_market"] == "Downtown Core",
+                                               "Downtown Core", "Rest of market"))
+        premium_bar_chart(loc_txf, "location", ["Downtown Core", "Rest of market"], BLUE)
+    with row1b:
+        st.markdown("**Tenure premium** — Freehold vs. Leasehold")
+        fh = txf[txf["tenure_type"] == "Freehold"]["psf"].median()
+        lh = txf[txf["tenure_type"] == "Leasehold"]["psf"].median()
+        mc = st.columns(2)
+        mc[0].metric("Freehold median $PSF", f"{fh:,.0f}")
+        mc[1].metric("Leasehold median $PSF", f"{lh:,.0f}",
+                     f"{(fh/lh-1)*100:+.0f}% freehold premium" if lh else None)
+        premium_bar_chart(txf, "tenure_type", ["Freehold", "Leasehold"], RED)
 
     st.divider()
-    st.markdown("**Floor-level premium**")
-    floor_bins = [0, 5, 15, 100]
-    floor_labels = ["Low (1–5F)", "Mid (6–15F)", "High (16F+)"]
-    by_floor = (txf.assign(floor_tier=pd.cut(txf["floor"], floor_bins, labels=floor_labels))
-               .groupby("floor_tier", observed=True)
-               .agg(median_psf=("psf", "median"), transactions=("psf", "size")).reset_index())
-    st.altair_chart(alt.Chart(by_floor).mark_bar(color=BLUE).encode(
-        x=alt.X("floor_tier:N", title=None, sort=floor_labels),
-        y=alt.Y("median_psf:Q", title="Median $PSF", scale=alt.Scale(zero=False)),
-        tooltip=["floor_tier:N", alt.Tooltip("median_psf:Q", format=",.0f"),
-                 alt.Tooltip("transactions:Q", format=",.0f")]
-    ).properties(height=300), width="stretch")
+    row2a, row2b = st.columns(2)
+    with row2a:
+        st.markdown("**Floor-level premium**")
+        floor_bins = [0, 5, 15, 100]
+        floor_labels = ["Low (1–5F)", "Mid (6–15F)", "High (16F+)"]
+        floor_txf = txf.assign(floor_tier=pd.cut(txf["floor"], floor_bins, labels=floor_labels))
+        premium_bar_chart(floor_txf, "floor_tier", floor_labels, BLUE)
+    with row2b:
+        st.markdown("**Sale-type premium**")
+        premium_bar_chart(txf, "type_of_sale", ["New Sale", "Resale", "Sub Sale"], RED)
 
     st.divider()
-    st.markdown("**Sale-type premium**")
-    by_sale = (txf.groupby("type_of_sale")
-              .agg(median_psf=("psf", "median"), transactions=("psf", "size")).reset_index())
-    st.altair_chart(alt.Chart(by_sale).mark_bar(color=RED).encode(
-        x=alt.X("type_of_sale:N", title=None, sort=["New Sale", "Resale", "Sub Sale"]),
-        y=alt.Y("median_psf:Q", title="Median $PSF", scale=alt.Scale(zero=False)),
-        tooltip=["type_of_sale:N", alt.Tooltip("median_psf:Q", format=",.0f"),
-                 alt.Tooltip("transactions:Q", format=",.0f")]
-    ).properties(height=300), width="stretch")
+    row3a, row3b = st.columns(2)
+    with row3a:
+        st.markdown("**Unit-size premium**")
+        size_labels = ["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"]
+        premium_bar_chart(txf, "size_band", size_labels, BLUE)
+    with row3b:
+        st.markdown("**Deal-size premium**")
+        deal_labels = ["<$5M", "$5-10M", ">$10M"]
+        premium_bar_chart(txf, "deal_band", deal_labels, RED)
 
     st.divider()
     st.markdown("**MRT-accessibility premium**")
@@ -394,15 +403,9 @@ with t4:
         bands = [0, 0.2, 0.4, 0.6, 0.8, 1.0, np.inf]
         band_labels = ["≤200m", "200–400m", "400–600m", "600–800m", "800m–1km", ">1km"]
         mrt_txf = mrt_txf.assign(mrt_band=pd.cut(mrt_txf["dist_to_mrt_km"], bands, labels=band_labels))
-        by_band = (mrt_txf.groupby("mrt_band", observed=True)
-                  .agg(median_psf=("psf", "median"), transactions=("psf", "size")).reset_index())
         corr = mrt_txf[["dist_to_mrt_km", "psf"]].corr().iloc[0, 1]
         st.caption(f"{len(mrt_txf):,} geocoded transactions, straight-line distance to the "
                    f"nearest MRT/LRT exit. Correlation (distance vs $PSF): **{corr:+.2f}** "
                    f"(negative = pricier closer to a station, as expected).")
-        st.altair_chart(alt.Chart(by_band).mark_bar(color=BLUE).encode(
-            x=alt.X("mrt_band:N", title="Distance to nearest MRT/LRT", sort=band_labels),
-            y=alt.Y("median_psf:Q", title="Median $PSF", scale=alt.Scale(zero=False)),
-            tooltip=["mrt_band:N", alt.Tooltip("median_psf:Q", format=",.0f"),
-                     alt.Tooltip("transactions:Q", format=",.0f")]
-        ).properties(height=320), width="stretch")
+        premium_bar_chart(mrt_txf, "mrt_band", band_labels, BLUE,
+                          x_title="Distance to nearest MRT/LRT", height=320)

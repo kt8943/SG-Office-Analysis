@@ -245,7 +245,7 @@ Derived in `load_data`:
 | `size_band` | bins of area: `<=500 / 500-1k / 1k-2k / 2k-5k / >5k` sqft |
 | `type_of_sale` | `Type of Sale` (Resale / New Sale / Sub Sale) |
 | `floor` | regex `#(\d+)-` from `Address` (~97% coverage); `floor_imputed` flags the rest, median-filled |
-| `deal_band` | bins of `price`: `<$5M / $5-10M / >$10M` (loaded, not yet wired into any chart) |
+| `deal_band` | bins of `price`: `<$5M / $5-10M / >$10M` — Geospatial → Premium Factors → Deal-size |
 | `street` | `Address` with leading house number(s) and `#unit` suffix stripped (regex) — feeds the Street filter (Trends, Geospatial) |
 | `real_psf` | `psf × 100 / cpi` — CPI-deflated $PSF (2024 base), via a quarter join to `cpi` |
 | `lat`, `lon` | joined from `geocoded_buildings.csv` by (`Project Name`, block+street address) — 98.9% coverage, blank (not guessed) for the ~8 buildings OneMap can't resolve (§8) |
@@ -387,12 +387,15 @@ scroll instead of losing rows past a cutoff.
 - **Planning Area Map & Ranking** — Map: the same bubble map grouped by planning area instead of
   postal district. Ranking: avg $psf by URA planning area, ≥10 transactions only (unstable
   small-sample averages otherwise). Deep-dive: that area's transactions.
-- **Premium Factors** — four $psf comparisons, each its own chart: **Location** (Downtown Core vs.
-  rest of market) and **Tenure** (Freehold vs. Leasehold) as KPI deltas + a grouped bar chart;
-  **Floor tier** (Low/Mid/High, binned from `floor`); **Sale type** (New Sale / Resale / Sub Sale);
-  and **MRT-accessibility** (median $psf by distance-to-nearest-MRT band, §9, for geocoded
-  transactions only). No map/ranking/deep-dive here — these are market-wide comparisons, not
-  drill-downs into one group.
+- **Premium Factors** — six $psf comparisons (each its own chart, `premium_bar_chart`), laid out
+  two per row except the last (more categories, needs the width): **Location** (Downtown Core vs.
+  rest of market, with KPI-delta metrics) and **Tenure** (Freehold vs. Leasehold, with KPI-delta
+  metrics); **Floor tier** (Low/Mid/High, binned from `floor`) and **Sale type** (New Sale / Resale
+  / Sub Sale); **Unit-size** (`size_band`) and **Deal-size** (`deal_band`, transaction price
+  bucketed <$5M/$5–10M/>$10M — both confirm a real, roughly monotonic premium in the current data,
+  bigger units/deals pricier per sqft); and, full-width, **MRT-accessibility** (median $psf by
+  distance-to-nearest-MRT band, §9, for geocoded transactions only). No map/ranking/deep-dive here
+  — these are market-wide comparisons, not drill-downs into one group.
 
 ### Summary ([backend/data_summary.py](backend/data_summary.py))
 
@@ -546,9 +549,12 @@ chart) since there's no genuine monthly release for it.
 | District ranking bar / detail table | `avg_psf`, `median_psf`, `psf`, `price`, `area_sqft` | `Unit Price ($ PSF)`, `Transacted Price ($)`, `Area (SQFT)`, grouped/filtered by `postal_district` |
 | Planning Area map | `lat`, `lon`, `avg_psf`, `transactions` | same `render_bubble_map` as the District map, grouped by `sub_market` ← `Planning Area` instead of `postal_district`; bubble position = mean of that area's geocoded transactions (no hand-set fallback exists at this granularity) |
 | Planning Area ranking bar / detail table | `avg_psf`, `median_psf`, `transactions` | as above, grouped by `sub_market` ← `Planning Area` |
-| Premium Factors — Location/Tenure | `psf` split by `sub_market == 'Downtown Core'` and `tenure_type` | `Unit Price ($ PSF)`, `Planning Area`, `tenure_type` (derived from `Tenure`, §4) |
+| Premium Factors — Location | `psf` split by `sub_market == 'Downtown Core'` | `Unit Price ($ PSF)`, `Planning Area` |
+| Premium Factors — Tenure | `psf` split by `tenure_type` | `Unit Price ($ PSF)`, `tenure_type` (derived from `Tenure`, §4) |
 | Premium Factors — Floor tier | `psf` split by `floor` binned Low(1–5)/Mid(6–15)/High(16+) | `Unit Price ($ PSF)`, `floor` (regex from `Address`, §4) |
 | Premium Factors — Sale type | `psf` split by `type_of_sale` | `Unit Price ($ PSF)`, `Type of Sale` |
+| Premium Factors — Unit-size | `psf` split by `size_band` | `Unit Price ($ PSF)`, `size_band` (bins of `Area (SQFT)`, §4) |
+| Premium Factors — Deal-size | `psf` split by `deal_band` | `Unit Price ($ PSF)`, `deal_band` (bins of `Transacted Price ($)`, §4) |
 | Premium Factors — MRT-accessibility | `dist_to_mrt_km` (binned), `psf` | `dist_to_mrt_km` = haversine distance from `lat`/`lon` to the nearest MRT/LRT exit (`_nearest_mrt` in `data_pipeline.py`) |
 
 `pmet_employment` (`load_employment_annual()`, ← `Number of Employed Residents by Occupation.csv`)
