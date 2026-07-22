@@ -28,6 +28,7 @@ MACRO_GROUPS = {
         "PSF vs Vacancy Rate": ("vacancy_rate", "Office Vacancy Rate (%)"),
         "PSF vs Supply Pipeline": ("supply_pipeline", "Supply Pipeline ('000 sqm)"),
         "PSF vs Office-Using Employment Change": ("office_employment_chg", "Employment chg ('000, qtr)"),
+        "PSF vs Unemployment Rate": ("unemployment", "Unemployment Rate (%, SA)"),
     },
     "Construction Costs": {
         "PSF vs Cement Price": ("price_cement", "Cement Price (bulk, $/tonne)"),
