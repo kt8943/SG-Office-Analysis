@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-DATA = Path(__file__).parent / "Data"
+DATA = Path(__file__).parent.parent / "Data"
 
 # Approximate centroids (lat, lon) for Singapore postal districts D01–D28.
 DISTRICT_CENTROIDS = {

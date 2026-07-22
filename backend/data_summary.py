@@ -11,8 +11,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DATA = Path("Data")
-OUT = Path("outputs"); OUT.mkdir(exist_ok=True)
+ROOT = Path(__file__).parent.parent
+DATA = ROOT / "Data"
+OUT = ROOT / "outputs"; OUT.mkdir(exist_ok=True)
 pd.set_option("display.width", 200, "display.max_columns", 40)
 
 

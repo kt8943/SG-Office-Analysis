@@ -1,7 +1,7 @@
 """Overview / landing page — what the app does, headline numbers, and how to use it."""
 import streamlit as st
 
-from data_pipeline import load_data, type_filter
+from backend.data_pipeline import load_data, type_filter
 
 st.title("Singapore Office Price Analysis")
 st.markdown(

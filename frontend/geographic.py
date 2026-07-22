@@ -8,7 +8,7 @@ import altair as alt
 import streamlit as st
 import streamlit.components.v1 as components
 
-from data_pipeline import load_data, type_filter, DISTRICT_CENTROIDS, DISTRICT_LABELS
+from backend.data_pipeline import load_data, type_filter, DISTRICT_CENTROIDS, DISTRICT_LABELS
 
 BLUE, RED = "#2E7DF7", "#E4572E"
 

@@ -2,7 +2,8 @@
 SG Office Analysis — multipage app.
 
 Entry/router: sets global page config + tab styling, then dispatches to the
-Price Trends and Geographic Analysis pages via st.navigation.
+Price Trends and Geographic Analysis pages (frontend/) via st.navigation.
+Shared data logic lives in backend/data_pipeline.py.
 
 Run:  streamlit run app.py
 """
@@ -27,8 +28,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 nav = st.navigation([
-    st.Page("views/overview.py", title="Overview", default=True),
-    st.Page("views/trends.py", title="Trends (2010 - 2026)"),
-    st.Page("views/geographic.py", title="Geospatial Analysis"),
+    st.Page("frontend/overview.py", title="Overview", default=True),
+    st.Page("frontend/trends.py", title="Trends (2010 - 2026)"),
+    st.Page("frontend/geographic.py", title="Geospatial Analysis"),
 ])
 nav.run()

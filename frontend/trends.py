@@ -3,8 +3,8 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
-from data_pipeline import (load_data, type_filter, market_monthly,
-                          load_market_monthly, downsample_market_monthly)
+from backend.data_pipeline import (load_data, type_filter, market_monthly,
+                                   load_market_monthly, downsample_market_monthly)
 
 alt.data_transformers.disable_max_rows()
 BLUE, RED = "#2E7DF7", "#E4572E"
