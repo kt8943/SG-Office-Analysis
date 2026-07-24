@@ -226,7 +226,7 @@ txf = tx[tx["sub_market"].isin(pick(sub_sel, areas_all))
          & tx["type_of_sale"].isin(pick(tos_sel, ["Resale", "New Sale", "Sub Sale"]))
          & tx["tenure_type"].isin(pick(ten_sel, ["Leasehold", "Freehold"]))
          & tx["size_band"].astype(str).isin(pick(size_sel, ["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"]))
-         & tx["floor"].between(floor_range[0], floor_range[1])
+         & tx["floor"].between(floor_range[0], floor_range[1]).fillna(True)  # whole-building rows have no floor -> don't drop them on a floor filter
          & tx["year"].between(yr_range[0], yr_range[1])
          & tx["Project Name"].isin(pick(name_sel, projects_all))
          & tx["street"].isin(pick(street_sel, streets_all))].copy()

@@ -59,9 +59,20 @@ tx["area_sqft"] = tx["Area (SQFT)"]
 tx["log_area"] = np.log(tx["area_sqft"])
 tx["size_band"] = pd.cut(tx["area_sqft"], [0, 500, 1000, 2000, 5000, np.inf],
                          labels=["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"])
-tx["floor"] = tx["Address"].str.extract(r"#(\d+)-")[0].astype(float)
-tx["floor"] = tx["floor"].fillna(tx["floor"].median())
-tx["high_floor"] = (tx["floor"] >= 20).astype(int)
+# Basement units "#B1-.." -> negative floor; multi-floor units (comma- or slash-listed)
+# averaged; whole-building rows with no unit -> NaN (not median-filled). Matches the
+# pipeline parser in data_pipeline.py.
+def _mean_floor(addr):
+    floors = []
+    for part in re.findall(r"#([^-]+)-", str(addr)):
+        nums = [int(n) for n in re.findall(r"\d+", part)]
+        if "B" in part.upper():
+            floors.extend(-n for n in nums)
+        else:
+            floors.extend(nums)
+    return round(np.mean(floors)) if floors else np.nan
+tx["floor"] = tx["Address"].apply(_mean_floor)
+tx["high_floor"] = (tx["floor"] >= 20).fillna(False).astype(int)  # NaN floor -> not high
 tx["type_of_sale"] = tx["Type of Sale"]
 
 tx["is_freehold"] = tx["Tenure"].str.contains("Freehold|999", case=False, na=False).astype(int)

@@ -303,14 +303,34 @@ def load_data():
     tx["quarter_of_year"] = tx["sale_date"].dt.quarter
     tx["sub_market"] = tx["Planning Area"]
     tx["postal_district"] = pd.to_numeric(tx["Postal District"], errors="coerce").astype("Int64")
+    # Freehold-equivalent = literal "Freehold" text OR any numeric lease term > 99 years
+    # (999/9999-yr leases, but also 998-yr — a string match on "999" alone missed 998-yr
+    # leases, wrongly classifying them as ordinary Leasehold; a >99yr threshold is robust
+    # to any such near-perpetual lease length, not just the specific values seen so far).
+    tenure_years = pd.to_numeric(tx["Tenure"].str.extract(r"^(\d+)\s*yrs?\s*from")[0], errors="coerce")
     tx["tenure_type"] = np.where(
-        tx["Tenure"].str.contains("Freehold|999", case=False, na=False), "Freehold", "Leasehold")
+        tx["Tenure"].str.contains("Freehold", case=False, na=False) | (tenure_years > 99),
+        "Freehold", "Leasehold")
     tx["size_band"] = pd.cut(tx["Area (SQFT)"], [0, 500, 1000, 2000, 5000, np.inf],
                              labels=["<=500", "500-1k", "1k-2k", "2k-5k", ">5k"])
     tx["type_of_sale"] = tx["Type of Sale"]
-    tx["floor"] = tx["Address"].str.extract(r"#(\d+)-")[0].astype(float)
-    tx["floor_imputed"] = tx["floor"].isna()
-    tx["floor"] = tx["floor"].fillna(tx["floor"].median()).astype(int)
+    # Floor from the "#<floor>-<unit>" part of the address. Fixes over the naive `#(\d+)-`
+    # extract (review finding): basement units "#B1-.."/"#B2-.." -> NEGATIVE floors (were
+    # silently median-filled to a positive floor); units spanning several floors, whether
+    # comma-listed ("#01-01,#02-01") or slash-listed ("#05/06/07-01"), are AVERAGED;
+    # whole-building / multi-address resales with no unit number are left NaN (flagged by
+    # floor_imputed), not fabricated. Result is nullable Int64.
+    def _mean_floor(addr):
+        floors = []
+        for part in re.findall(r"#([^-]+)-", str(addr)):   # each "#<floorpart>-" token
+            nums = [int(n) for n in re.findall(r"\d+", part)]
+            if "B" in part.upper():
+                floors.extend(-n for n in nums)            # basement -> negative
+            else:
+                floors.extend(nums)
+        return round(np.mean(floors)) if floors else np.nan
+    tx["floor"] = tx["Address"].apply(_mean_floor).astype("Int64")  # nullable: NaN kept, not filled
+    tx["floor_imputed"] = tx["floor"].isna()  # True only for rows with no parseable unit/floor
     tx["deal_band"] = pd.cut(tx["price"], [0, 5e6, 10e6, np.inf],
                              labels=["<$5M", "$5-10M", ">$10M"])
     # street name: strip the leading house number(s) — some addresses list several,
